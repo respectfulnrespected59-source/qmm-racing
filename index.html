@@ -1244,12 +1244,16 @@
   // ===== CrazyGames SDK — safe wrapper. The external SDK is loaded ONLY when hosted on CrazyGames (or
   // localhost for testing); every other build (hub / itch / offline) loads nothing external and no-ops here,
   // so there's no third-party dependency or supply-chain exposure off-platform. =====
-  const CG={ ok:false, s:null,
+  const CG={ ok:false, s:null, _ls:false,
     async init(){ try{ const h=location.hostname||'';
       if(!/crazygames/.test(h) && h!=='localhost' && h!=='127.0.0.1') return;   // only reach out to the SDK on CrazyGames
       if(!(window.CrazyGames&&window.CrazyGames.SDK)){ await new Promise((res,rej)=>{ const s=document.createElement('script'); s.src='https://sdk.crazygames.com/crazygames-sdk-v3.js'; s.crossOrigin='anonymous'; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
-      if(window.CrazyGames&&window.CrazyGames.SDK){ await window.CrazyGames.SDK.init(); CG.s=window.CrazyGames.SDK; CG.ok=true; }
+      if(window.CrazyGames&&window.CrazyGames.SDK){ await window.CrazyGames.SDK.init(); CG.s=window.CrazyGames.SDK; CG.ok=true;
+        try{ CG.s.game.loadingStart(); CG._ls=true; }catch(e){}    // bracket the initial load → CrazyGames measures the SMALL first-download (the 21-track music streams later, one track per race, AFTER gameplayStart)
+        CG.loaded(); }
     }catch(e){} },
+    loaded(){ const done=()=>{ try{ if(CG.ok&&CG._ls){ CG.s.game.loadingStop(); CG._ls=false; } }catch(e){} };   // fire loadingStop once every EAGER asset is in (window 'load') + one frame — the game is playable by then
+      if(document.readyState==='complete') requestAnimationFrame(done); else window.addEventListener('load',()=>requestAnimationFrame(done),{once:true}); },
     start(){ try{ if(CG.ok)CG.s.game.gameplayStart(); }catch(e){} },      // CrazyGames measures time-to-gameplay from here
     stop(){ try{ if(CG.ok)CG.s.game.gameplayStop(); }catch(e){} },
     midgame(done){ try{ if(CG.ok&&CG.s.ad){ CG.s.ad.requestAd('midgame',{adFinished:()=>done&&done(),adError:()=>done&&done()}); } else if(done)done(); }catch(e){ if(done)done(); } } };   // between-race ad only (never during a race, per CrazyGames rules)
