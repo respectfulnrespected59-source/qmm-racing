@@ -155,6 +155,8 @@
       <button class="btn diffbtn" data-d="serpent">THE SERPENT<small>🐍 S-curves · counter-steer · 5 laps</small></button>
       <button class="btn diffbtn" data-d="fig8">FIGURE-8<small>🌉 loop · bridge · JUMP · 4 laps</small></button>
       <button class="btn diffbtn" data-d="xcountry">CROSS-COUNTRY<small>🏁 point-to-point · water bridge · jump · checkpoints</small></button>
+      <button class="btn diffbtn" data-d="egypt">EGYPT<small>🏜️ Sphinx · pyramids · palms · Nile · 5 laps</small></button>
+      <button class="btn diffbtn" data-d="sf">SAN FRANCISCO<small>🌉 Golden Gate · bay · Victorians · fog · 5 laps</small></button>
     </div>
     <button class="btn" id="gfxBtn" style="margin-top:14px;padding:10px 22px;font-size:.9rem">GRAPHICS: LITE ⚡</button>
     <div class="garageHint">◄ ► or A / D to switch rides · pick a track · <b>LITE</b> = smooth on low-end PCs, <b>FULL</b> = all the eye-candy</div>
@@ -203,8 +205,8 @@
   // ===== CAR ROSTER (player-selectable in the Garage) — real-car-inspired top-down sprites + tuned stats =====
   const CARS=[
     {id:'camaro',    file:'car_hero.png',      s:0.160, name:'QUANTUM ZL1', driver:'MELVINCI', cls:'MUSCLE', color:'#C43B3B', spd:86,acc:84,hdl:82,grp:86},
-    {id:'zl1violet', file:'car_hero.png', tint:'#7a3fd0', blackStripes:true, turnFrom:'camaro', s:0.160, name:'QM ZL1 · VIOLET', driver:'MAHAL KITA', cls:'MUSCLE', color:'#8a4fd0', spd:88,acc:86,hdl:84,grp:88},
-    {id:'charger',   file:'car_charger.png',   s:0.167, name:'CRIMSON R/T', driver:'DESHAWN',  cls:'MUSCLE', color:'#b0202a', spd:88,acc:82,hdl:68,grp:72},
+    {id:'zl1violet', file:'car_hero.png', tint:'#7a3fd0', blackStripes:true, clearGlass:true, turnFrom:'camaro', s:0.160, name:'QM ZL1 · VIOLET', driver:'MAHAL KITA', cls:'MUSCLE', color:'#8a4fd0', spd:88,acc:86,hdl:84,grp:88},
+    {id:'charger',   file:'car_charger.png',   s:0.167, name:'CRIMSON R/T', driver:'DESHAWN',  cls:'MUSCLE', color:'#b0202a', spd:88,acc:82,hdl:68,grp:72},   // turn sprite was drawn wheels-reversed → FIXED by flipping assets/turn/charger.png to match the others
     {id:'challenger',file:'car_challenger.png',s:0.145, name:'GHOST CAT',   driver:'LIL TEE',  cls:'MUSCLE', color:'#8a8f96', spd:86,acc:85,hdl:66,grp:70},
     {id:'corvette',  file:'car_corvette.png',  s:0.169, name:'STINGRAY Z',  driver:'AMARA',    cls:'SPORTS', color:'#e8c020', spd:90,acc:86,hdl:82,grp:80},
     {id:'m6',        file:'car_m6.png',        s:0.140, name:'BAVARIA M6',  driver:'NIA',      cls:'GT',     color:'#1c3a8a', spd:84,acc:80,hdl:84,grp:82},
@@ -235,12 +237,20 @@
           x.globalAlpha=0.45; x.fillStyle='#39313f'; x.fillRect(sx,y0,1.4,y1-y0); x.fillRect(sx+sw-1.4,y0,1.4,y1-y0); }
         x.globalCompositeOperation='destination-in'; x.globalAlpha=1; x.drawImage(base,0,0); }
       x.globalCompositeOperation='source-over'; x.globalAlpha=1;
+      if(c.clearGlass){ try{   // keep the WINDOWS clear glass (don't let the purple tint recolour them) → restore the base's blue-glass pixels over the tint, so it looks dope like the player's ZL1
+        const tmp=document.createElement('canvas'); tmp.width=w; tmp.height=h; const tg=tmp.getContext('2d'); tg.drawImage(base,0,0);
+        const bd=tg.getImageData(0,0,w,h).data, id=x.getImageData(0,0,w,h), td=id.data;
+        for(let i=0;i<td.length;i+=4){ if(bd[i+3]<20)continue; const r=bd[i],g=bd[i+1],b=bd[i+2], br=(r+g+b)/3;
+          if(b>r+8 && b>g-10 && br<140){ td[i]=r; td[i+1]=g; td[i+2]=b; td[i+3]=bd[i+3]; } }   // blue-dominant + dark/mid = window glass → restore original
+        x.putImageData(id,0,0);
+      }catch(e){} }
       outMap[c.id]=cn; if(setURL){ try{ c._tintURL=cn.toDataURL(); }catch(e){} }
       if(typeof renderGarage==='function' && !document.getElementById('garage').classList.contains('hidden') && CARS[playerCar]===c) renderGarage();
     };
     if(base.complete&&base.naturalWidth)mk(); else base.addEventListener('load',mk); }
   CARS.forEach(c=>{ if(c.tint)buildTintInto(CARIMG[c.id],c,TINT,true); });
   function loadPhoto(c){ if(PHOTOIMG[c.id])return; const im=new Image(); PHOTOIMG[c.id]=im; im.src='assets/photo/car_'+c.id+'.png';
+    if(c.flip)im.addEventListener('load',()=>{ PHOTOIMG[c.id]=flipImg(im); });   // nose-DOWN photo sprite → vertical flip to face forward (matches the cartoon tier) — fixes 918/R8 driving backward/weird in PHOTO mode
     if(c.tint)im.addEventListener('load',()=>buildTintInto(im,c,PHOTOTINT,false)); }
   // drawable sprite for a car: PHOTO tier prefers photoreal asset (falls back to cartoon until it loads); tinted cars use their tint
   function carSprite(c){ if(photo){ if(!PHOTOIMG[c.id])loadPhoto(c); const p=c.tint?PHOTOTINT[c.id]:PHOTOIMG[c.id]; if(spriteReady(p))return p; }
@@ -250,8 +260,8 @@
   const CARTURN={};
   function loadTurn(c){ const id=c.id; if(CARTURN[id]!==undefined)return;
     if(c.tint && c.turnFrom){ CARTURN[id]=null;   // tinted turn frame — recolour the base car's turn frame to match the center tint
-      const base=new Image(); base.addEventListener('load',()=>buildTintInto(base,c,CARTURN,false)); base.src='assets/turn/'+c.turnFrom+'.png'; }
-    else { const im=new Image(); CARTURN[id]=im; if(c.flip)im.addEventListener('load',()=>{ CARTURN[id]=flipImg(im); }); im.src='assets/turn/'+id+'.png'; } }
+      const base=new Image(); base.addEventListener('load',()=>buildTintInto(base,c,CARTURN,false)); base.src='assets/turn/'+c.turnFrom+'.png?v=3'; }
+    else { const im=new Image(); CARTURN[id]=im; if(c.flip)im.addEventListener('load',()=>{ CARTURN[id]=flipImg(im); }); im.src='assets/turn/'+id+'.png?v=3'; } }   // ?v=2 cache-buster → the flipped charger turn sprite can't serve stale
   let playerCar=0;   // index into CARS — chosen in the Garage
   const sMul={ top:c=>1+(c.spd-84)/100*1.15, acc:c=>1+(c.acc-82)/100*1.2, turn:c=>1+(c.hdl-80)/100*1.0, gripRetain:c=>0.74-(c.grp-80)/100*0.42 };   // lower gripRetain = more planted/less slide (better control)
   // Higgsfield top-down HOOD rooftop art for roadside buildings
@@ -273,43 +283,63 @@
   // muscle-car V8: sub-rumble + detuned saws + growl noise + lumpy "chug" LFO, low-pass opens with revs
   let engReady=false,engGain=null,engFilt=null,engA=null,engB=null,engC=null,engSub=null,engChug=null,engPrevGear=0;
   let engRes1=null,engRes2=null,engSubOsc=null,engFire=null;   // exhaust PIPE resonators (sweep with the revs) + clean sub-rumble floor + gritty firing-lope LFO
+  let engThump=null,engThumpG=null;   // dedicated HEADPHONE SUB — deep sine straight to master so you FEEL it
+  let engSampleReady=false,engSampleSrc=null,engSampleG=null;   // REAL V8 sample (drop-in assets/engine/idle.wav) — pitch-shifted by RPM, native stereo
   function startEngine(){ if(!AUD.ctx||engReady)return; const c=AUD.ctx;
-    engGain=c.createGain(); engGain.gain.value=0; engGain.connect(AUD.master);
+    engGain=c.createGain(); engGain.gain.value=0;
+    // ---- ENGINE MASTER-BUS (quality): warm the low-mids for chest, shave the digital "fizz" off the top, then GLUE with a compressor → a produced, recorded-engine tone instead of a raw synth ----
+    const engDeep=c.createBiquadFilter(); engDeep.type='lowshelf'; engDeep.frequency.value=130; engDeep.gain.value=6.5;   // DEEP: sub-bass weight → a bigger, lower motor
+    const engWarm=c.createBiquadFilter(); engWarm.type='peaking'; engWarm.frequency.value=82; engWarm.Q.value=0.8; engWarm.gain.value=6;   // deeper chest/warmth
+    const engDefizz=c.createBiquadFilter(); engDefizz.type='highshelf'; engDefizz.frequency.value=2800; engDefizz.gain.value=-4.5;          // tame the worst fizz but let the MEAN edge through
+    const engComp=c.createDynamicsCompressor(); engComp.threshold.value=-24; engComp.knee.value=22; engComp.ratio.value=4; engComp.attack.value=0.005; engComp.release.value=0.15;   // harder glue = punchier, meaner, consistent rumble
+    engGain.connect(engDeep); engDeep.connect(engWarm); engWarm.connect(engDefizz); engDefizz.connect(engComp); engComp.connect(AUD.master);
     // ---- HEADPHONE STEREO WIDENER (Haas): dry on the left, a ~9ms-delayed copy on the right → the engine opens up WIDE on cans.
     //      Sub freqs (long wavelength) stay centered, so the low-end rumble never cancels — width lives in the mids/pipe honk. ----
     const merger=c.createChannelMerger(2), wide=c.createGain(); wide.gain.value=1;
     wide.connect(merger,0,0);
-    const haas=c.createDelay(); haas.delayTime.value=0.009; const hg=c.createGain(); hg.gain.value=0.9; wide.connect(haas); haas.connect(hg); hg.connect(merger,0,1);
+    const haas=c.createDelay(); haas.delayTime.value=0.013; const hg=c.createGain(); hg.gain.value=0.96; wide.connect(haas); haas.connect(hg); hg.connect(merger,0,1);   // wider Haas = bigger stereo image on headphones
     merger.connect(engGain);
     // body/cabinet resonance — a low peak so it sounds HOUSED in a muscle car, not a raw buzzer
     const body=c.createBiquadFilter(); body.type='peaking'; body.frequency.value=140; body.Q.value=1.1; body.gain.value=5; body.connect(wide);
     engFilt=c.createBiquadFilter(); engFilt.type='lowpass'; engFilt.frequency.value=500; engFilt.Q.value=0.9; engFilt.connect(body);
     // ---- EXHAUST PIPE RESONATORS: two high-Q peaks that sweep UP with the revs = that hollow metallic pipe "honk" that intensifies as you climb ----
-    engRes1=c.createBiquadFilter(); engRes1.type='peaking'; engRes1.frequency.value=180; engRes1.Q.value=5; engRes1.gain.value=7; engRes1.connect(engFilt);
-    engRes2=c.createBiquadFilter(); engRes2.type='peaking'; engRes2.frequency.value=360; engRes2.Q.value=5.5; engRes2.gain.value=5; engRes2.connect(engRes1);
+    engRes1=c.createBiquadFilter(); engRes1.type='peaking'; engRes1.frequency.value=180; engRes1.Q.value=5; engRes1.gain.value=9; engRes1.connect(engFilt);   // angrier pipe honk
+    engRes2=c.createBiquadFilter(); engRes2.type='peaking'; engRes2.frequency.value=360; engRes2.Q.value=5.5; engRes2.gain.value=6.5; engRes2.connect(engRes1);
     const chug=c.createGain(); chug.gain.value=0.85; chug.connect(engRes2);           // firing-lumpiness bus → pipe resonators
     // waveshaper overdrive = aggressive V8 SNARL (4x oversample = cleaner, studio-grade grit)
-    const shaper=c.createWaveShaper(); const cv=new Float32Array(257); for(let i=0;i<257;i++){ const x=i/128-1; cv[i]=Math.tanh(x*2.9); } shaper.curve=cv; shaper.oversample='4x'; shaper.connect(chug);
+    const shaper=c.createWaveShaper(); const cv=new Float32Array(257); for(let i=0;i<257;i++){ const x=i/128-1; cv[i]=Math.tanh(x*3.4); } shaper.curve=cv; shaper.oversample='4x'; shaper.connect(chug);   // MEANER overdrive snarl (the de-fizz shelf keeps it from turning harsh)
     const mix=c.createGain(); mix.gain.value=0.5; mix.connect(shaper);
     // core firing tone — detuned saws (cylinder banks slightly out of phase = fat V8)
     engA=c.createOscillator(); engA.type='sawtooth'; engA.frequency.value=58; engA.connect(mix);
     engB=c.createOscillator(); engB.type='sawtooth'; engB.frequency.value=58; engB.detune.value=16; engB.connect(mix);
     engC=c.createOscillator(); engC.type='sawtooth'; engC.frequency.value=58; engC.detune.value=-14; engC.connect(mix);
     // DEEP dual-sub rumble — square at half-firing + a clean sine floor → chest-thump on headphones
-    engSub=c.createOscillator(); engSub.type='square'; engSub.frequency.value=29; const subG=c.createGain(); subG.gain.value=0.6; engSub.connect(subG); subG.connect(chug);
-    engSubOsc=c.createOscillator(); engSubOsc.type='sine'; engSubOsc.frequency.value=44; const sg2=c.createGain(); sg2.gain.value=0.55; engSubOsc.connect(sg2); sg2.connect(chug);
+    engSub=c.createOscillator(); engSub.type='square'; engSub.frequency.value=29; const subG=c.createGain(); subG.gain.value=0.92; engSub.connect(subG); subG.connect(chug);   // DEEPER sub thump
+    engSubOsc=c.createOscillator(); engSubOsc.type='sine'; engSubOsc.frequency.value=44; const sg2=c.createGain(); sg2.gain.value=0.8; engSubOsc.connect(sg2); sg2.connect(chug);   // stronger clean sub floor
+    // DEDICATED HEADPHONE SUB — a deep sine wired STRAIGHT to master (bypasses the tone filters) so the rumble hits your chest on cans
+    engThump=c.createOscillator(); engThump.type='sine'; engThump.frequency.value=42; engThumpG=c.createGain(); engThumpG.gain.value=0; engThump.connect(engThumpG); engThumpG.connect(AUD.master);
     // growl/air noise (intake + exhaust hiss)
     const n=Math.floor(c.sampleRate*1),buf=c.createBuffer(1,n,c.sampleRate),d=buf.getChannelData(0); for(let i=0;i<n;i++)d[i]=Math.random()*2-1;
-    const ns=c.createBufferSource(); ns.buffer=buf; ns.loop=true; const nf=c.createBiquadFilter(); nf.type='lowpass'; nf.frequency.value=360; const ng=c.createGain(); ng.gain.value=0.16; ns.connect(nf); nf.connect(ng); ng.connect(chug);
+    const ns=c.createBufferSource(); ns.buffer=buf; ns.loop=true; const nf=c.createBiquadFilter(); nf.type='lowpass'; nf.frequency.value=340; const ng=c.createGain(); ng.gain.value=0.12; ns.connect(nf); nf.connect(ng); ng.connect(chug);   // cleaner intake hiss (0.16→0.12) = less fuzzy
     // FIRING LOPE — the "potato-potato" V8 burble: two LFOs (smooth sine + gritty saw) modulate the chug bus at the firing rate
     engChug=c.createOscillator(); engChug.type='sine'; engChug.frequency.value=11; const cd=c.createGain(); cd.gain.value=0.34; engChug.connect(cd); cd.connect(chug.gain);
-    engFire=c.createOscillator(); engFire.type='sawtooth'; engFire.frequency.value=22; const fd=c.createGain(); fd.gain.value=0.12; engFire.connect(fd); fd.connect(chug.gain);
-    engA.start(); engB.start(); engC.start(); engSub.start(); engSubOsc.start(); ns.start(); engChug.start(); engFire.start(); engReady=true; }
+    engFire=c.createOscillator(); engFire.type='sawtooth'; engFire.frequency.value=22; const fd=c.createGain(); fd.gain.value=0.16; engFire.connect(fd); fd.connect(chug.gain);   // grittier firing lope = meaner burble
+    engA.start(); engB.start(); engC.start(); engSub.start(); engSubOsc.start(); ns.start(); engChug.start(); engFire.start(); engThump.start(); engReady=true; loadEngineSample(); }
+  // REAL V8 SAMPLE — auto-loads assets/engine/idle.wav if present (a loop you own / a clean royalty-free one), pitch-shifts it by RPM in NATIVE STEREO, and ducks the synth under it. No file → pure synth (unchanged). Same pattern as the tire-screech sample.
+  function loadEngineSample(){ if(!AUD.ctx || engSampleReady)return; const c=AUD.ctx;
+    fetch('assets/engine/idle.wav').then(r=>r.ok?r.arrayBuffer():Promise.reject()).then(b=>c.decodeAudioData(b)).then(buf=>{
+      const s=c.createBufferSource(); s.buffer=buf; s.loop=true; engSampleG=c.createGain(); engSampleG.gain.value=0;
+      if(buf.numberOfChannels<2){   // widen a MONO sample into stereo (Haas): dry left, ~12ms-delayed copy right → real V8 spreads on headphones
+        const merger=c.createChannelMerger(2), dry=c.createGain(); s.connect(dry); dry.connect(merger,0,0);
+        const hd=c.createDelay(); hd.delayTime.value=0.012; const hg=c.createGain(); hg.gain.value=0.9; dry.connect(hd); hd.connect(hg); hg.connect(merger,0,1); merger.connect(engSampleG);
+      } else s.connect(engSampleG);   // already stereo → keep native
+      engSampleG.connect(AUD.master); s.start(); engSampleSrc=s; engSampleReady=true;
+    }).catch(()=>{}); }
   function engineUpdate(spd,boost){ if(!AUD.ctx||!engReady)return; const t=AUD.ctx.currentTime;
     // GEARBOX: revs climb within a gear, then drop on each up-shift (with a clutch "chk")
     const ref=BOOST_MAX, GEARS=5;
     const gf=Math.min(GEARS-0.001,(Math.max(0,spd)/ref)*GEARS), gear=Math.floor(gf), frac=gf-gear;
-    const rpm=84 + frac*210;                                        // revs harder & higher = meaner
+    const rpm=74 + frac*198;                                        // DEEPER register (lower idle + top) → a bigger, lower, meaner growl
     engA.frequency.setTargetAtTime(rpm,t,0.015); engB.frequency.setTargetAtTime(rpm,t,0.015); engC.frequency.setTargetAtTime(rpm,t,0.015); engSub.frequency.setTargetAtTime(rpm*0.5,t,0.015);
     if(engSubOsc) engSubOsc.frequency.setTargetAtTime(38+rpm*0.35,t,0.02);            // clean sub-rumble floor tracks the revs a touch
     engChug.frequency.setTargetAtTime(9+rpm*0.12,t,0.03);           // firing lope follows the revs
@@ -318,8 +348,20 @@
     // PIPE RESONANCE sweeps up with the revs → the exhaust honk opens and intensifies as you climb each gear
     if(engRes1) engRes1.frequency.setTargetAtTime(150+rpm*1.5,t,0.05);
     if(engRes2) engRes2.frequency.setTargetAtTime(300+rpm*3.0,t,0.05);
-    engGain.gain.setTargetAtTime(AUD.muted?0:Math.min(0.26,0.10+spd*0.0002)+(boost?0.03:0),t,0.05);
-    if(gear>engPrevGear && spd>70) noise(0.06,0.11,700,200);        // up-shift clutch "chk"
+    // DEDICATED SUB — sub-octave of the revs, ramps with speed → the chest-thump you FEEL on headphones
+    if(engThump){ engThump.frequency.setTargetAtTime(32+rpm*0.22,t,0.03); engThumpG.gain.setTargetAtTime(AUD.muted?0:0.26+Math.min(0.24,spd*0.0003)+(boost?0.07:0),t,0.05); }
+    // REAL V8 SAMPLE (if a loop was dropped in) — pitch-shift by RPM in native stereo, and DUCK the synth to a support layer under it
+    if(engSampleReady && engSampleSrc){ const rate=0.62+((rpm-74)/198)*2.3+gear*0.06; engSampleSrc.playbackRate.setTargetAtTime(rate,t,0.03);   // WIDER rev swing on the sample: big climb within a gear then a big DROP on each up-shift
+      engSampleG.gain.setTargetAtTime(AUD.muted?0:0.16+Math.min(0.12,spd*0.00018)+(boost?0.05:0),t,0.05); }   // sample = texture layer (not so loud it buries the shift)
+    const synthLvl = engSampleReady ? (0.19+Math.min(0.09,spd*0.00013)) : Math.min(0.26,0.10+spd*0.0002);   // synth's CLEAR firing tone stays UP — it's what audibly revs & drops on each shift
+    engGain.gain.setTargetAtTime(AUD.muted?0:synthLvl+(boost?0.03:0),t,0.05);
+    // ===== DOPE GEAR SHIFTS ===== up-shift = clutch chk + rev-drop BWAP + exhaust pop · down-shift = rev-match blip
+    if(gear!==engPrevGear && spd>40){ const up=gear>engPrevGear;
+      if(up){ noise(0.055,0.34,1200,420);                                   // LOUD clutch/gear engagement "CHK"
+        beep(Math.min(560,rpm*2.1),0.15,'sawtooth',0.32,Math.max(70,rpm*1.05));   // BWAP — firing tone snaps DOWN as the revs drop
+        setTimeout(()=>{ if(!AUD.muted){ noise(0.07,0.26,430,150); beep(70,0.09,'square',0.26,42); } },55);   // exhaust POP / crackle on the overrun
+      } else { beep(Math.min(420,rpm*1.5),0.12,'sawtooth',0.28,Math.min(640,rpm*2.5)); noise(0.05,0.20,840,260); }   // down-shift throttle BLIP (rev-match brap)
+    }
     engPrevGear=gear; }
   // tire screech — clean subtle synth by default; auto-swaps to a REAL sample if assets/screech.wav is present
   let scReady=false,scGain=null,scBP=null,scSynthGain=null;
@@ -347,7 +389,7 @@
   // a bare gain.value=0 leaves the scheduled ramp live, so it climbs back to idle and the
   // accel/engine hum keeps playing after the race ends. cancel → pin → short fade to 0.
   function engineSilence(){ if(!AUD.ctx)return; const t=AUD.ctx.currentTime;
-    [engGain,scGain].forEach(g=>{ if(!g)return; g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value,t); g.gain.setTargetAtTime(0,t,0.05); }); }
+    [engGain,scGain,engThumpG,engSampleG].forEach(g=>{ if(!g)return; g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value,t); g.gain.setTargetAtTime(0,t,0.05); }); }
 
   // ===== QMM SOUNDTRACK (streams via HTML <audio>, one track at a time — low memory) =====
   const MTRACKS=[
@@ -374,7 +416,7 @@
   function musicPause(p){ if(p){ raceAudio.pause(); menuAudio.pause(); } else if(!AUD.muted&&!musicMuted){ (running?raceAudio:menuAudio).play().catch(()=>{}); } }
 
   // ============ TRACK (3 difficulties) ============
-  const CX=0,CY=0; const TRACK=[],NRM=[],props=[],CP=[],puddles=[]; const TN=220,NCP=6;
+  const CX=0,CY=0; const TRACK=[],NRM=[],props=[],CP=[],puddles=[],crowd=[]; const TN=220,NCP=6;
   let BRIDGE=null, JUMP=null;   // BRIDGE = self-crossing overpass point; JUMP = ramp/air zone (stunt track)
   let OPEN=false, WATER=null, FINISHIDX=0;   // OPEN = point-to-point cross-country stage (checkpoints, not laps); WATER = bridge-over-water zone
   let ROAD_W=420, TOTAL_LAPS=3, curDiff='medium', curSpd=1;
@@ -389,22 +431,34 @@
     const off=A*Math.sin(k*t+ph);
     return { x:cx+(-ty/tl)*off, y:cy+(tx/tl)*off };
   }; }
+  // ===================== WORLD THEMES — per-track environments =====================
+  let curTheme='hood';
+  const landmarks=[], deco=[];   // landmarks = big set-pieces (pyramids/sphinx/golden gate); deco = palms/obelisks/trees/poles along the road
+  const THEMES={
+    hood:{  skyIn:'#3a2a5c', skyOut:'#160f28', nSkyIn:'#1a1030', nSkyOut:'#05030a', road:'#141026', nRoad:'#0d0a18', lane:'rgba(201,168,76,.55)', build:'neon',      crowd:'hood'  },
+    egypt:{ skyIn:'#e8cf92', skyOut:'#caa25c', nSkyIn:'#2e2440', nSkyOut:'#141024', road:'#b39566', nRoad:'#5c4a34', lane:'rgba(90,60,26,.6)',    build:'sandstone', crowd:'egypt', sun:true, palms:true },
+    sf:{    skyIn:'#aebccb', skyOut:'#74869c', nSkyIn:'#1c2636', nSkyOut:'#0a1220', road:'#3b414c', nRoad:'#1b2130', lane:'rgba(240,240,240,.5)', build:'victorian', crowd:'sf',    fog:true } };
+  function TH(){ return THEMES[curTheme]||THEMES.hood; }
   const DIFFS={
     // EASY stays the basic wide oval. Everything above it snakes through real S-curves (2*k of them).
-    easy:  {name:'EASY',   roadW:660, laps:4, rSpd:420, rStep:12, rN:3, spd:0.80, rFn:t=>1560+300*Math.sin(2*t)+120*Math.cos(t)},
-    medium:{name:'MEDIUM', roadW:600, laps:6, rSpd:600, rStep:24, rN:4, spd:1.00, pFn:wavy(1550,1400,420,3,0.3,0.10)},   // long, steep zig-zags · wide
-    hard:  {name:'HARD',   roadW:560, laps:8, rSpd:880, rStep:34, rN:5, spd:1.10, rCatch:250, rDrop:95,  sc:{a:0.30,b:0.47}, pFn:wavy(1560,1420,310,4,0.3,0.10)},   // FASTER, tenacious rivals + zig-zags + shortcut
-    insane:{name:'INSANE', roadW:520, laps:12,rSpd:1010,rStep:38, rN:5, spd:1.18, rCatch:330, rDrop:80,  sc:{a:0.30,b:0.46}, pFn:wavy(1560,1420,230,5,0.3,0.10)},   // brutal rivals — chase hard, barely ease off + shortcut
-    serpent:{name:'THE SERPENT', roadW:480, laps:5, rSpd:660, rStep:24, rN:4, spd:1.04, sc:{a:0.31,b:0.46}, pFn:wavy(1580,1440,190,6,0.3,0.10)},   // the ultimate technical run
+    easy:  {name:'EASY',   roadW:660, laps:4, rSpd:470, rStep:16, rN:3, spd:0.80, rCatch:185, rDrop:130, rFn:t=>1560+300*Math.sin(2*t)+120*Math.cos(t)},
+    medium:{name:'MEDIUM', roadW:600, laps:6, rSpd:670, rStep:28, rN:4, spd:1.00, rCatch:215, rDrop:115, pFn:wavy(1550,1400,420,3,0.3,0.10)},   // long, steep zig-zags · wide
+    hard:  {name:'HARD',   roadW:560, laps:8, rSpd:945, rStep:38, rN:5, spd:1.10, rCatch:305, rDrop:88,  sc:{a:0.30,b:0.47}, pFn:wavy(1560,1420,310,4,0.3,0.10)},   // FASTER, tenacious rivals + zig-zags + shortcut
+    insane:{name:'INSANE', roadW:520, laps:12,rSpd:1085,rStep:42, rN:5, spd:1.18, rCatch:390, rDrop:72,  sc:{a:0.30,b:0.46}, pFn:wavy(1560,1420,230,5,0.3,0.10)},   // brutal rivals — chase hard, barely ease off + shortcut
+    serpent:{name:'THE SERPENT', roadW:480, laps:5, rSpd:730, rStep:28, rN:4, spd:1.04, rCatch:235, rDrop:105, sc:{a:0.31,b:0.46}, pFn:wavy(1580,1440,190,6,0.3,0.10)},   // the ultimate technical run
     // FIGURE-8 STUNT — the road crosses over itself (bridge overpass) like a freeway interchange, plus a JUMP ramp
-    fig8:{name:'FIGURE-8', roadW:440, laps:4, rSpd:640, rStep:24, rN:4, spd:1.04, cross:true, jz:{overCross:true},
+    fig8:{name:'FIGURE-8', roadW:440, laps:4, rSpd:710, rStep:28, rN:4, spd:1.04, rCatch:215, rDrop:112, cross:true, jz:{overCross:true},
       pFn:t=>({ x:1560*Math.cos(t), y:2640*Math.sin(t)*Math.cos(t) })},
     // CROSS-COUNTRY — a long point-to-point rally STAGE (start→finish, checkpoints, no laps) with a BRIDGE OVER WATER + a jump
-    xcountry:{name:'CROSS-COUNTRY', roadW:480, rSpd:780, rStep:24, rN:5, spd:1.16, open:true, seg0:0, water:{a:0.235,b:0.285}, jz:{at:0.68,len:5},   // giant serpentine: full semicircle U-turns + straights; water + jump both on STRAIGHTS
+    xcountry:{name:'CROSS-COUNTRY', roadW:480, rSpd:850, rStep:28, rN:5, spd:1.16, rCatch:235, rDrop:108, open:true, seg0:0, water:{a:0.235,b:0.285}, jz:{at:0.68,len:5},   // giant serpentine: full semicircle U-turns + straights; water + jump both on STRAIGHTS
       segs:[{k:0,len:2600},{k:1/1700,len:Math.PI*1700},{k:0,len:2000},{k:-1/1700,len:Math.PI*1700},{k:0,len:2000},{k:1/1700,len:Math.PI*1700},{k:0,len:2000},{k:-1/1700,len:Math.PI*1700},{k:0,len:3800}]},
+    // ===== EGYPT — desert circuit past the Sphinx & pyramids, palms + Nile =====
+    egypt:{name:'EGYPT', roadW:560, laps:5, rSpd:720, rStep:26, rN:4, spd:1.05, rCatch:220, rDrop:112, theme:'egypt', pFn:wavy(1580,1440,300,3,0.5,0.12)},
+    // ===== SAN FRANCISCO — bay circuit over the Golden Gate, Victorians + fog =====
+    sf:{name:'SAN FRANCISCO', roadW:540, laps:5, rSpd:730, rStep:26, rN:4, spd:1.06, rCatch:225, rDrop:110, theme:'sf', pFn:wavy(1560,1420,340,4,0.2,0.14)},
   };
   function buildTrack(dk){ const D=DIFFS[dk]; curDiff=dk; ROAD_W=D.roadW; OPEN=!!D.open; TOTAL_LAPS=OPEN?1:D.laps; curSpd=D.spd||1; rivalCatch=D.rCatch||160; rivalDrop=D.rDrop||150;
-    TRACK.length=0; NRM.length=0; CP.length=0; props.length=0; WATER=null;
+    TRACK.length=0; NRM.length=0; CP.length=0; props.length=0; WATER=null; curTheme=D.theme||'hood'; landmarks.length=0; deco.length=0;
     if(D.segs){
       // ARC-SEGMENT STAGE — integrate straights + semicircle U-turns (exaggerated S-curves), then resample by arc length
       let x=0,y=0,th=D.seg0||0; const raw=[{x:0,y:0}], STEP=28;
@@ -428,8 +482,36 @@
     // JUMP ramp / air zone. overCross → anchor the ramp just BEFORE the self-crossing so the car
     // sails clean OVER the cross-traffic (no messy intersecting lines, no bridge slab needed).
     JUMP = D.jz ? ( (D.jz.overCross && BRIDGE) ? {a:(BRIDGE.i-7+TN)%TN, len:5, over:true, cx:BRIDGE.x, cy:BRIDGE.y} : {a:Math.round((D.jz.at||0.1)*TN)%TN, len:D.jz.len||10} ) : null;
-    for(let i=0;i<TN;i+=5){ const p=TRACK[i],n=NRM[i],ang=Math.atan2(NRM[i].y,NRM[i].x)+Math.PI/2;
-      for(const side of [1,-1]){ const off=ROAD_W*0.5+120+((i*7)%90); props.push({x:p.x+n.x*off*side,y:p.y+n.y*off*side,a:ang,w:130+((i*11)%120),h:160+((i*17)%180),h3d:220+((i*23)%280),lamp:(i%10===0),hue:(i%3),taper:0.72+((i*13)%26)/100}); } }
+    // POINTS OF INTEREST — a park, a lake, a school right off the road (buildings clear out so you drive PAST them)
+    const POI=[{i:Math.round(0.16*TN)%TN,side:1,k:'park',s:150+ROAD_W*0.06},{i:Math.round(0.34*TN)%TN,side:-1,k:'gas',s:132+ROAD_W*0.05},{i:Math.round(0.52*TN)%TN,side:1,k:'lake',s:160+ROAD_W*0.06},{i:Math.round(0.70*TN)%TN,side:-1,k:'stadium',s:200+ROAD_W*0.10},{i:Math.round(0.86*TN)%TN,side:1,k:'school',s:150+ROAD_W*0.07}];
+    for(const P of POI){ const pp=TRACK[P.i],nn=NRM[P.i], tg=Math.atan2(TRACK[(P.i+3)%TN].y-pp.y,TRACK[(P.i+3)%TN].x-pp.x);
+      P.inSide=(pp.x*nn.x+pp.y*nn.y>0)?-1:1;   // side pointing toward the loop centre = the big OPEN space behind the buildings
+      const off=ROAD_W*0.5+500+P.s; landmarks.push({k:P.k, x:pp.x+nn.x*off*P.inSide, y:pp.y+nn.y*off*P.inSide, s:P.s*1.25, rot:tg}); }   // sit them OUT in the open behind the buildings (no more buildings on top)
+    const poiSkip=(i,side)=>POI.some(P=>P.inSide===side && Math.abs(i-P.i)<=9);   // clear a sightline gap through the buildings to the POI behind them
+    const sfBridge=(curTheme==='sf')?{a:Math.round(TN*0.5)-26,b:Math.round(TN*0.5)+26}:null;   // GOLDEN GATE span over the bay — no city here; you race ON the bridge, then curve back into the city
+    let lF1=null,lFm1=null,lB1=null,lBm1=null;   // last front/back building per side → SKIP overlaps so tight-corner insides don't smush buildings together
+    for(let i=0;i<TN;i+=4){ if(sfBridge && i>=sfBridge.a && i<=sfBridge.b)continue;   // over the bay — clear the city
+      const p=TRACK[i],n=NRM[i],ang=Math.atan2(NRM[i].y,NRM[i].x)+Math.PI/2;
+      for(const side of [1,-1]){
+        if(poiSkip(i,side))continue;   // leave a gap for the park / lake / school
+        // FRONT storefront row — tight to the road; skip if it would overlap the previous building on this side (fixes corner smushing)
+        const off=ROAD_W*0.5+96+((i*7)%54), bx=p.x+n.x*off*side, by=p.y+n.y*off*side, bw=130+((i*11)%120), lf=side>0?lF1:lFm1;
+        if(!(lf && Math.hypot(bx-lf.x,by-lf.y) < (bw+lf.w)*0.5*0.94)){
+          props.push({x:bx,y:by,a:ang,w:bw,h:160+((i*17)%180),h3d:230+((i*23)%280),lamp:(i%10===0),hue:(i%3),taper:0.74+((i*13)%24)/100,name:STORES[((i*7)+(side>0?0:17))%STORES.length]});
+          if(side>0)lF1={x:bx,y:by,w:bw}; else lFm1={x:bx,y:by,w:bw}; }
+        // BACK skyline row — taller towers for city depth (also overlap-guarded)
+        if((i*5)%3===0){ const off2=ROAD_W*0.5+300+((i*17)%180), gx=p.x+n.x*off2*side, gy=p.y+n.y*off2*side, gw=150+((i*13)%150), lb=side>0?lB1:lBm1;
+          if(!(lb && Math.hypot(gx-lb.x,gy-lb.y) < (gw+lb.w)*0.5*0.9)){
+            props.push({x:gx,y:gy,a:ang,w:gw,h:180+((i*19)%200),h3d:380+((i*29)%360),lamp:false,hue:((i+1)%3),taper:0.70+((i*7)%22)/100});
+            if(side>0)lB1={x:gx,y:gy,w:gw}; else lBm1={x:gx,y:gy,w:gw}; } }
+      } }
+    // ROADSIDE SPECTATORS — cheering clusters on the shoulders, denser near the start/finish line
+    crowd.length=0;
+    for(let i=0;i<TN;i+=4){ if(WATER&&i>=WATER.a-3&&i<=WATER.b+3)continue; if(sfBridge&&i>=sfBridge.a-2&&i<=sfBridge.b+2)continue;   // no crowd on the river or the Golden Gate bridge
+      const near=(i<20||i>TN-16)?1:0; if(!near && (i*23)%5>=2)continue;
+      const p=TRACK[i],n=NRM[i],np=TRACK[(i+1)%TN], tang=Math.atan2(np.y-p.y,np.x-p.x);
+      for(const side of [1,-1]){ const off=ROAD_W*0.5+34+((i*13)%40), n2=near?(7+((i*5)%6)):(3+((i*7)%4));
+        crowd.push({x:p.x+n.x*off*side,y:p.y+n.y*off*side,ang:tang,n:n2,ph:(i*side)*0.37,hot:near}); } }
     puddles.length=0;   // wet-road puddles scattered on the tarmac, elongated along travel
     for(let i=1;i<TN;i+=3){ if((i*29)%5>1)continue; const p=TRACK[i],np=TRACK[(i+1)%TN],n=NRM[i], tang=Math.atan2(np.y-p.y,np.x-p.x), lat=(((i*37)%100)/100-0.5)*ROAD_W*0.62, ln=40+((i*17)%55);
       puddles.push({x:p.x+n.x*lat,y:p.y+n.y*lat,ang:tang,len:ln,wid:ln*0.46,hue:i%3}); }
@@ -437,7 +519,7 @@
     boosts.length=0; const nB=OPEN?12:8;
     for(let b=0;b<nB;b++){ const idx=OPEN?Math.round((b+1)/(nB+1)*(TN-1)):Math.floor((b+0.5)/nB*TN)%TN;
       if(idx<3||(WATER&&idx>=WATER.a-2&&idx<=WATER.b+2))continue; const p=TRACK[idx],n=NRM[idx],lane=((b%3)-1)*ROAD_W*0.26;
-      boosts.push({x:p.x+n.x*lane,y:p.y+n.y*lane,cd:0,ph:b*0.7}); } }
+      boosts.push({x:p.x+n.x*lane,y:p.y+n.y*lane,cd:0,ph:b*0.7}); } buildThemeDecor(); }
   function nearestTrack(px,py){ let best=1e12,idx=0; for(let i=0;i<TN;i++){ const dx=TRACK[i].x-px,dy=TRACK[i].y-py,d=dx*dx+dy*dy; if(d<best){best=d;idx=i;} } return {dist:Math.sqrt(best),idx}; }
 
   // ============ CARS ============
@@ -477,7 +559,7 @@
   // ============ INPUT ============
   const keys={},K={left:false,right:false,drift:false,boost:false,brake:false};
   window.addEventListener('keydown',e=>{ keys[e.code]=true; if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code))e.preventDefault();
-    if(e.code==='Space' && !e.repeat && car)car.driftHold=Math.max(car.driftHold||0,0.3);   // brief tap-grace so a quick stab into a corner still catches — but HOLDING space is the real e-brake, and it releases the instant you let go (was 1.0s, which made drift linger after release → felt glitchy)
+    if(e.code==='Space' && !e.repeat && car)car.driftHold=Math.max(car.driftHold||0,0.42);   // tap-grace: a last-second STAB into a corner reliably catches a slide (0.42s = long enough to steer through the apex, short enough it still releases clean). HOLDING space is the sustained e-brake.
     if(e.code==='KeyN')night=!night; if(e.code==='KeyW')wet=!wet; if(e.code==='KeyT')assist=!assist; if(e.code==='KeyL'){gfxTier++;applyGfx();} if(e.code==='KeyJ')skipTrack(); if(e.code==='KeyP')togglePause(); if(e.code==='KeyM')toggleMute(); if(e.code==='KeyB')toggleMusic(); if(e.code==='KeyH'){ copsOn=!copsOn; if(!copsOn){cops=[];heat=0;heatStars=0;escapeT=0;} } });
   window.addEventListener('keyup',e=>{ keys[e.code]=false; });
   const T={left:false,right:false,drift:false,boost:false,brake:false,steerAxis:0,joy:false};
@@ -552,20 +634,20 @@
     const PC=CARS[playerCar];                                       // selected car's stats tune the physics
     const momo=1+Math.min(0.40,(car.clean||0)*0.03);                // CLEAN-DRIVING MOMENTUM: stay off the walls → keep gaining speed
     const targetTop=(car.boostT>0?BOOST_MAX:MAXSPD)*((car.hyperT||0)>0?1.28:1)*sMul.top(PC)*momo*curSpd*UMUL.top;   // *UMUL.top = Top Speed upgrade   // curSpd = difficulty speed-scale; hyperT (from a boost capsule) pushes past even the boost cap
-    const launchMul=1+Math.max(0,1-Math.max(0,vF)/360)*0.55;        // gentler off-line kick (was 1.25) — no abrupt low-speed surge
-    const accel=(car.boostT>0?1000:790)*launchMul*sMul.acc(PC);   // smooth, even build to top speed — NO drift-exit accel spike (exit is grip-recovery only, so no speed lurch)
+    const launchMul=1+Math.max(0,1-Math.max(0,vF)/360)*0.72;        // punchier off-line kick — standing starts / corner exits pull HARD, no more sluggish crawl
+    const accel=(car.boostT>0?1800:1440)*launchMul*sMul.acc(PC);   // punchier accel — quicker off the line & out of corners (was 1280/1600)
     if(K.brake){ vF-=1500*dt; if(vF<-240)vF=-240; } else vF+=accel*dt;
-    vF*=0.992; if(vF>targetTop)vF=targetTop; if(vF<-240)vF=-240;
+    vF*=0.997; if(vF>targetTop)vF=targetTop; if(vF<-240)vF=-240;   // even LESS drag (0.992→0.996→0.997) → holds top-end on the straights where the INSANE pack pulls away; top speed still clamped by targetTop
 
-    const speedFactor=Math.min(1,spd/210), driftAuth=car.drifting?1.8:1.0; let steer=0; if(K.left)steer-=1; if(K.right)steer+=1;   // driftAuth = extra rotation while HOLDING space → the car pivots hard into the corner (Asphalt-style throw), then straightens as you release
+    const speedFactor=Math.min(1,spd/210), driftAuth=car.drifting?1.65:1.0; let steer=0; if(K.left)steer-=1; if(K.right)steer+=1;   // driftAuth = extra rotation while HOLDING space → the e-brake pivots into the corner, but SMOOTHLY (was 2.1 = too sharp/snappy). Still throws the tail; just more natural.
     if(T.joy)steer=Math.max(-1,Math.min(1,T.steerAxis));   // analog joystick (mobile) overrides — partial steering for smooth finger control
     const hiK=Math.max(0,Math.min(1,(spd-330)/520));   // 0 at cruise → 1 near top speed: drives the high-speed STABILITY package below (keep the speed, gain the control)
     // SMOOTH STEERING — ease the input toward full lock instead of snapping, so fast cornering stays
     // controllable and looks clean. Press eases in quick (responsive); at very high speed both directions
     // ease a touch softer so fast corrections are PRECISE, not nervous/jerky.
-    const easeRate=(steer!==0?14-hiK*3.5:9+hiK*2.5);
+    const easeRate=car.drifting?(11-hiK*2.5):(steer!==0?18-hiK*4:11+hiK*3);   // DRIFT: steer input eases in SMOOTHLY so the slide applies gradually & natural (NOT a snap) — the fix for "too sharp when drifting". GRIP: still quick/sharp on the straights.
     car.steerInput=(car.steerInput||0)+(steer-(car.steerInput||0))*Math.min(1,dt*easeRate);
-    const hiSpeedDamp=1-0.42*hiK;   // plant the car HARD at top speed — steering stays alive, just calmer (no darting/twitch at 400+)
+    const hiSpeedDamp=car.drifting?(1-0.20*hiK):(1-0.30*hiK);   // drift now keeps a MILD high-speed plant (was full/none = too wild) → smoother, more natural pivot while still going quick
     // AIRBORNE = ballistic: no steering, no drift — the car flies DEAD STRAIGHT off the ramp (a real jump)
     if((car.airZ||0)<=0){
       car.a+=car.steerInput*2.9*sMul.turn(PC)*UMUL.turn*driftAuth*speedFactor*hiSpeedDamp*dt;   // *UMUL.turn = Handling upgrade
@@ -602,7 +684,7 @@
     if(car.drifting&&slip>60&&spd>200){ car.m=Math.min(100,car.m+(slip/900)*dt*38*(night?2:1));
       const smCol=car.driftCharge>2.0?'#8fe8e8':car.driftCharge>1.1?'#e0a468':null;   // TIERED smoke — heats up with the drift charge (white → amber → cyan)
       if(Math.random()<0.9)smoke.push({x:car.x-fx*30,y:car.y-fy*30,r:9+Math.random()*10,a:0.5,col:smCol,vx:-car.vx*0.05+(Math.random()-.5)*40,vy:-car.vy*0.05+(Math.random()-.5)*40});
-      if(!lite&&car.driftCharge>1.1&&Math.random()<0.5)smoke.push({x:car.x-fx*38+(Math.random()-.5)*20,y:car.y-fy*38+(Math.random()-.5)*20,r:7+Math.random()*7,a:0.42,col:smCol,vx:-car.vx*0.04+(Math.random()-.5)*60,vy:-car.vy*0.04+(Math.random()-.5)*60}); }   // extra billow on the hotter tiers (FULL/PHOTO only)
+      if(!lite&&Math.random()<0.7)smoke.push({x:car.x-fx*38+(Math.random()-.5)*20,y:car.y-fy*38+(Math.random()-.5)*20,r:7+Math.random()*7,a:0.42,col:smCol,vx:-car.vx*0.04+(Math.random()-.5)*60,vy:-car.vy*0.04+(Math.random()-.5)*60}); }   // denser PS3 billow on the hotter tiers (FULL/PHOTO only)
     if(!car.offRoad&&spd>300)car.m=Math.min(100,car.m+dt*3*(night?2:1));
     // ===== DRIFT-BOOST (tiered mini-turbo): charge through the corner, LAUNCH out with a surge =====
     if(car.drifting&&spd>160) car.driftCharge=Math.min(2.6,(car.driftCharge||0)+dt*(0.55+Math.min(1.6,slip/210)));
@@ -613,7 +695,7 @@
         car.clean=(car.clean||0)+tier*0.7;
         car.m=Math.min(100,car.m+tier*5); shake=Math.max(shake,1+tier);                           // the slide still FILLS the M24.9e meter — you burn it MANUALLY with SHIFT; it never fires itself
         beep([0,320,240,170][tier],0.20,'sawtooth',0.16,[0,700,860,1050][tier]);                  // soft tire-chirp on regrip (no turbo whoosh)
-        for(let i=0;i<tier*4;i++)sparks.push({x:car.x,y:car.y,vx:(Math.random()-.5)*180,vy:(Math.random()-.5)*180,a:1,r:2+Math.random()*3,col:tier===3?COL.cyan:COL.gold});
+        for(let i=0;i<(lite?tier*4:tier*6);i++)sparks.push({x:car.x,y:car.y,vx:(Math.random()-.5)*180,vy:(Math.random()-.5)*180,a:1,r:2+Math.random()*3,col:tier===3?COL.cyan:COL.gold});
         // DRIFT CHAIN — back-to-back clean drifts (within ~4s) multiply the SCORE payout (points only, not speed)
         car.driftChain=(car.chainT||0)>0?(car.driftChain||0)+1:1; car.chainT=4;
         const chPts=60*tier*car.driftChain; score+=chPts;
@@ -733,8 +815,14 @@
     if(OPEN){ if(nr>=TN-3 && !r.finished){ r.finished=true; r.place=++finishSeq; } }   // point-to-point: reaching the end finishes the run
     else if(r.pidx>TN-18 && nr<18 && !r.finished){ if(r.started){ r.lap++; if(r.lap>=TOTAL_LAPS){ r.finished=true; r.place=++finishSeq; } } else r.started=true; }   // first crossing = the start line (doesn't count)
     r.pidx=nr; r.idx=nr;
-    // steer toward a lookahead point on the track (clamp at the end for an open stage)
-    const tgt=TRACK[OPEN?Math.min(nr+7,TN-1):(nr+7)%TN]; let desired=Math.atan2(tgt.y-r.y,tgt.x-r.x);
+    // BETTER DRIVERS: look further ahead the faster they go, and cut a real racing line toward the inside apex
+    const rspd0=Math.hypot(r.vx||0,r.vy||0), LA=Math.round(6+Math.min(12,rspd0/95));
+    const TI=i=>OPEN?Math.max(0,Math.min(TN-1,i)):((i%TN)+TN)%TN;
+    const apexI=TI(nr+LA); let tgx=TRACK[apexI].x, tgy=TRACK[apexI].y;
+    { const mA=TRACK[TI(nr+Math.round(LA*0.4))], mC=TRACK[TI(nr+LA+Math.round(LA*0.6))];   // concavity vector points to the INSIDE of the curve (≈0 on straights → robust, no sign guessing)
+      let ivx=(mA.x+mC.x)/2-tgx, ivy=(mA.y+mC.y)/2-tgy; const il=Math.hypot(ivx,ivy)||1;
+      const apex=Math.min(ROAD_W*0.32, il*1.5); tgx+=ivx/il*apex; tgy+=ivy/il*apex; }   // clamp to keep them on-track (the road-ring clamp below is the final safety net)
+    let desired=Math.atan2(tgy-r.y,tgx-r.x);
     // AGGRESSION with RACING SENSE — only fight a car you're genuinely wheel-to-wheel with for position:
     // close by AND on similar race progress (not a lap up/down, not way ahead/behind). Then lean on them
     // to squeeze for the line — capped so they never abandon the racing line to spear someone. Real racecraft.
@@ -743,11 +831,24 @@
       consider(car.x,car.y,car.lap*TN+nearestTrack(car.x,car.y).idx);
       for(const o of rivals){ if(o===r||o.finished)continue; consider(o.x,o.y,o.lap*TN+o.idx); }
       if(tx!==null){ let ram=Math.atan2(ty-r.y,tx-r.x), dr=ram-desired; while(dr>Math.PI)dr-=2*Math.PI; while(dr<-Math.PI)dr+=2*Math.PI;
-        dr=Math.max(-0.5,Math.min(0.5,dr)); desired+=dr*0.20*(r.aggr||1); }   // subtle squeeze, never a full swerve off-line
+        dr=Math.max(-0.45,Math.min(0.45,dr)); desired+=dr*0.14*(r.aggr||1); }   // LIGHT position lean (reduced — the separation below keeps them from dogpiling into a blocking train)
     }
-    let da=desired-r.a; while(da>Math.PI)da-=2*Math.PI; while(da<-Math.PI)da+=2*Math.PI; const turn=3.5*dt; r.a+=Math.max(-turn,Math.min(turn,da));
+    // PACK RACING — fan OUT so they race side-by-side instead of stacking into a blocking train; draft a car just ahead to set up a pass
+    let sepx=0,sepy=0,drafting=false;
+    for(const o of rivals){ if(o===r||o.finished)continue; const ox=o.x-r.x,oy=o.y-r.y,od=Math.hypot(ox,oy)||1;
+      if(od<120){ sepx-=ox/od*(120-od); sepy-=oy/od*(120-od); }                              // push apart when overlapping → spread across the road
+      const ahead=ox*Math.cos(r.a)+oy*Math.sin(r.a); if(ahead>0&&ahead<220&&od<240)drafting=true; }   // a car right in front = slipstream
+    { const ox=car.x-r.x,oy=car.y-r.y,od=Math.hypot(ox,oy)||1; if(od<115){ sepx-=ox/od*(115-od); sepy-=oy/od*(115-od); } }   // ease off the PLAYER too — race clean, don't just wall them off
+    if(sepx||sepy){ let sa=Math.atan2(sepy,sepx),dsep=sa-desired; while(dsep>Math.PI)dsep-=2*Math.PI; while(dsep<-Math.PI)dsep+=2*Math.PI; desired+=Math.max(-0.45,Math.min(0.45,dsep))*0.55; }
+    let da=desired-r.a; while(da>Math.PI)da-=2*Math.PI; while(da<-Math.PI)da+=2*Math.PI; const turn=4.4*dt; r.a+=Math.max(-turn,Math.min(turn,da));
     const pProg=car.lap*TN+nearestTrack(car.x,car.y).idx, rProg=r.lap*TN+nr; let spd=r.speed+(pProg-rProg)*0.42; spd=Math.max(r.speed-rivalDrop,Math.min(r.speed+rivalCatch,spd));   // harder diffs: chase harder, ease off less when leading
-    if((r.surge||0)>0){ r.surge-=dt; spd+=220; }   // capsule surge
+    // NITRO PUSH — rivals burn their OWN boost on the straights so they actually RACE you (pull away → force a chase) instead of cruising
+    r.nitroCd=(r.nitroCd==null?1+Math.random()*3:r.nitroCd)-dt;
+    const sd0=Math.atan2(TRACK[TI(nr+2)].y-TRACK[nr].y,TRACK[TI(nr+2)].x-TRACK[nr].x), sd1=Math.atan2(TRACK[TI(nr+LA+2)].y-TRACK[TI(nr+LA)].y,TRACK[TI(nr+LA+2)].x-TRACK[TI(nr+LA)].x);
+    let cc=sd1-sd0; while(cc>Math.PI)cc-=2*Math.PI; while(cc<-Math.PI)cc+=2*Math.PI;
+    if(r.nitroCd<=0 && Math.abs(cc)<0.22 && (r.surge||0)<=0){ r.surge=0.7+Math.random()*0.5; r.nitroCd=3+Math.random()*4; }   // fire a self-nitro on a straight, then cool down 3–7s
+    if((r.surge||0)>0){ r.surge-=dt; spd+=220; }   // capsule OR self-nitro surge
+    if(drafting) spd+=90;   // slipstream tow → intra-pack overtakes (positions trade, not a static train)
     r.vx=Math.cos(r.a)*spd; r.vy=Math.sin(r.a)*spd;                                   // rail velocity — read by the bump math
     r.kx=(r.kx||0)*Math.max(0,1-dt*4.5); r.ky=(r.ky||0)*Math.max(0,1-dt*4.5);         // bump KNOCKBACK, decays over ~0.2s so a hit punts them then they recover
     r.x+=(r.vx+r.kx)*dt; r.y+=(r.vy+r.ky)*dt;
@@ -817,7 +918,65 @@
 
   const CAM3D=1900;
   const SIGNCOL=[COL.cyan,COL.gold,'#ff4da6','#9b6cff'];
-  function drawProps(){ const now=performance.now();
+  // per-theme BUILDING STYLES — walls, parapet, roof + sign treatment so each world reads right (neon hood / sandstone Egypt / pastel SF Victorians)
+  const BSTYLE={
+    neon:{      wall:['#241a44','#281640','#1a2244'], nWall:['#150e2e','#1a0e34','#101630'], parapet:'rgba(201,168,76,.5)', nParapet:'rgba(76,224,224,.55)', roofImg:true,  sign:'neon' },
+    sandstone:{ wall:['#cbab6e','#c8974a','#9a6f42'], nWall:['#6a5638','#6e5628','#584030'], parapet:'rgba(150,110,50,.65)', nParapet:'rgba(200,150,70,.5)', roofImg:false, roofCol:'#caa25c', nRoofCol:'#5a4a30', sign:'stone', pyramidRoof:true, win:'rgba(70,46,22,.55)', nWin:'rgba(255,198,120,.72)' },   // sand · Egyptian gold · wood, with pyramid/mastaba tops
+    victorian:{ wall:['#d89aa8','#a6c0d2','#e2d4a4','#c4b2da','#d2c2ac','#b8d0c0'], nWall:['#584048','#3e4e58','#5a5240','#4a4058','#544c40','#3e5048'], parapet:'rgba(255,255,255,.6)', nParapet:'rgba(200,220,255,.5)', roofImg:false, roofCol:'#8a5a48', nRoofCol:'#3a2e28', sign:'paint', pitched:true, win:'rgba(255,255,255,.5)', nWin:'rgba(255,228,176,.72)' } };
+  // made-up ACTIVATED-MELANIN-HOOD storefronts painted on the buildings
+  const STORES=['MELANIN MOTORS','KEMET KICKS','SANKOFA SOUL FOOD','ASÉ AUTO','COCOA & GOLD','NILE NAILS','OBSIDIAN CUTS','MANSA MARKET','QUANTUM WASH','SHEA STREET','KINFOLK KITCHEN','GRIOT RECORDS','TRIBAL THREADS','COWRIE CORNER','BLACKTOP BBQ','DASHIKI DRIP','PYRAMID PIZZA','JOLLOF JUNCTION','KENTE KUTS','MAAT MOTORS','DIASPORA DINER','UBUNTU MART','GOLDEN GRIND','IRON LION GYM','NUBIAN NAILS','FADE FACTORY','SOL FOOD','HARRIET HARDWARE','MELVINCI GARAGE','24.9e ENERGY'];
+  const SKIN=['#5a3520','#6b4226','#7a4b28','#8a5a30','#4a2c18'];   // melanated spectator tones
+  const CHEER=[COL.gold,COL.cyan,COL.orange,'#ff4da6','#9b6cff'];   // sign / flag / hype colours
+  const HAIR=['#0a0a0a','#1a1008','#0f0a06','#241608','#0c0c10'];   // dark hair tones
+  // per-theme spectator OUTFITS — hood streetwear · Egyptian linen+gold · SF jackets/fog-coats
+  const OUTFIT={ hood:[COL.gold,COL.cyan,COL.orange,'#ff4da6','#9b6cff','#57e08a'], egypt:['#f0e8d0','#e8d8a8','#d4c090','#f4ece0','#caa25c','#e6d29a'], sf:['#8a9bb5','#b56a6a','#6a8a7a','#c4b28a','#5a6a8a','#d0d0d8'] };
+  // soft PS3 contact shadow — radial-gradient blob (much softer than a flat ellipse)
+  function softShadow(cx,cy,rx,ry,al){ const g=ctx.createRadialGradient(cx,cy,0,cx,cy,Math.max(rx,ry)); g.addColorStop(0,'rgba(0,0,0,'+al+')'); g.addColorStop(0.6,'rgba(0,0,0,'+(al*0.55).toFixed(3)+')'); g.addColorStop(1,'rgba(0,0,0,0)'); ctx.save(); ctx.fillStyle=g; ctx.beginPath(); ctx.ellipse(cx,cy,rx,ry,0,0,7); ctx.fill(); ctx.restore(); }
+  // ROADSIDE SPECTATORS — bobbing/waving crowd that pops off when you blitz past or drift by (FULL/PHOTO only)
+  function drawCrowd(){ if(lite||!crowd.length)return; const now=performance.now(), spd=Math.hypot(car.vx,car.vy);
+    const oc=OUTFIT[TH().crowd]||OUTFIT.hood;
+    for(const cl of crowd){ const dx=cl.x-car.x,dy=cl.y-car.y,dd=dx*dx+dy*dy; if(dd>1200*1200)continue;
+      const hype=(dd<640*640 && (spd>280||car.drifting))?1:0;
+      ctx.save(); ctx.translate(cl.x,cl.y); ctx.rotate(cl.ang);
+      const SPC=19, HALF=cl.n*SPC*0.5+9;
+      ctx.fillStyle=night?'rgba(20,14,40,0.9)':'rgba(40,30,66,0.85)'; roundRect(-HALF,-22,HALF*2,36,6); ctx.fill();   // grandstand DECK
+      ctx.strokeStyle=night?'rgba(76,224,224,.5)':'rgba(201,168,76,.6)'; ctx.lineWidth=2; roundRect(-HALF,-22,HALF*2,36,6); ctx.stroke();
+      if(hype){ ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=0.45+0.3*Math.sin(now*0.02); const gg=ctx.createRadialGradient(0,-6,0,0,-6,HALF); gg.addColorStop(0,'rgba(201,168,76,0.55)'); gg.addColorStop(1,'rgba(201,168,76,0)'); ctx.fillStyle=gg; ctx.fillRect(-HALF,-34,HALF*2,52); ctx.restore(); }   // hype glow
+      ctx.strokeStyle=night?'rgba(76,224,224,.55)':'rgba(201,168,76,.65)'; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(-HALF+2,-16); ctx.lineTo(HALF-2,-16); ctx.stroke();   // front rail
+      for(let s=0;s<cl.n;s++){ const seed=(s*7+((cl.ph*11)|0)), pose=seed%5;
+        const jump=(hype&&(pose===0||pose===4))?Math.max(0,Math.sin(now*0.011+s*1.7))*5:0;
+        const bob=Math.sin(now*0.006+cl.ph+s*1.3)*2.0, gx=(s-(cl.n-1)/2)*SPC+((s*7)%5-2), yy=-4+bob-jump;
+        const sk=SKIN[seed%SKIN.length], out=oc[(seed*3)%oc.length], hr=HAIR[seed%HAIR.length], armUp=(hype?10:4)+jump*1.4, ph=Math.sin(now*0.013+s*2);
+        ctx.globalAlpha=0.30; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(gx,12,7,3,0,0,7); ctx.fill(); ctx.globalAlpha=1;   // ground shadow (deck floor)
+        ctx.strokeStyle=night?'#20242e':'#33383f'; ctx.lineWidth=2.4; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(gx-2.4,yy+8); ctx.lineTo(gx-2.8,yy+13); ctx.moveTo(gx+2.4,yy+8); ctx.lineTo(gx+2.8,yy+13); ctx.stroke();   // legs
+        ctx.fillStyle=out; roundRect(gx-4.8,yy-1,9.6,11,3); ctx.fill();                                  // torso (outfit)
+        if(TH().crowd==='egypt'){ ctx.strokeStyle='rgba(201,168,76,.85)'; ctx.lineWidth=1.4; ctx.beginPath(); ctx.moveTo(gx-4,yy+1); ctx.lineTo(gx+4,yy+8); ctx.stroke(); }   // gold sash
+        ctx.fillStyle=sk; ctx.beginPath(); ctx.arc(gx,yy-5,4.6,0,7); ctx.fill();                          // head
+        ctx.fillStyle=hr; ctx.beginPath(); ctx.arc(gx,yy-6.2,4.6,Math.PI*1.02,Math.PI*1.98); ctx.fill();  // hair cap
+        ctx.strokeStyle=sk; ctx.lineWidth=2.4; ctx.lineCap='round';
+        if(pose===0){ ctx.beginPath(); ctx.moveTo(gx-3.4,yy+1); ctx.lineTo(gx-6-ph*1.6,yy-6-armUp); ctx.moveTo(gx+3.4,yy+1); ctx.lineTo(gx+6+ph*1.6,yy-6-armUp); ctx.stroke(); }   // WAVE both arms
+        else if(pose===1){ ctx.beginPath(); ctx.moveTo(gx+3.2,yy+1); ctx.lineTo(gx+5,yy-7-armUp*0.6); ctx.stroke();
+          ctx.fillStyle=night?'#20242e':'#2a2e38'; roundRect(gx+3.2,yy-12-armUp*0.6,4.4,6.4,1); ctx.fill(); ctx.fillStyle=night?'#eafcff':'#7fd0ff'; ctx.fillRect(gx+4,yy-11-armUp*0.6,2.8,4.4); }   // PHONE filming (glowing screen)
+        else if(pose===2){ ctx.beginPath(); ctx.moveTo(gx-2,yy+1); ctx.lineTo(gx-2,yy-9-armUp*0.5); ctx.moveTo(gx+2,yy+1); ctx.lineTo(gx+2,yy-9-armUp*0.5); ctx.stroke();
+          ctx.fillStyle='#f4ece0'; roundRect(gx-7,yy-17-armUp*0.5,14,7.5,1.5); ctx.fill(); ctx.fillStyle=CHEER[seed%CHEER.length]; ctx.fillRect(gx-5.5,yy-15.5-armUp*0.5,11,4.5); }   // SIGN placard
+        else if(pose===3){ ctx.beginPath(); ctx.moveTo(gx+3,yy+1); ctx.lineTo(gx+5,yy-10-armUp*0.7); ctx.stroke();
+          ctx.strokeStyle='#5a4a30'; ctx.lineWidth=1.4; ctx.beginPath(); ctx.moveTo(gx+5,yy-11-armUp*0.7); ctx.lineTo(gx+5,yy-2); ctx.stroke();
+          ctx.fillStyle=CHEER[(seed*2)%CHEER.length]; ctx.beginPath(); ctx.moveTo(gx+5,yy-11-armUp*0.7); ctx.lineTo(gx+12+ph*2.4,yy-9.5-armUp*0.7); ctx.lineTo(gx+5,yy-6-armUp*0.7); ctx.closePath(); ctx.fill(); }   // FLAG waving
+        else { ctx.beginPath(); ctx.moveTo(gx-3.4,yy+1); ctx.lineTo(gx-5,yy-8-armUp); ctx.moveTo(gx+3.4,yy+1); ctx.lineTo(gx+5,yy-8-armUp); ctx.stroke(); } }   // CHEER pump both arms
+      // PROMINENT FLAG-WAVERS at each end of the stand — big RIPPLING flags (checkered marshals near the start/finish, QMM gold/cyan fans elsewhere)
+      for(const end of [-1,1]){ const bx=end*(HALF-6), sway=Math.sin(now*0.005+cl.ph+end*1.3)*5.5, pyTop=-54;
+        ctx.fillStyle=SKIN[((cl.ph*2|0)+(end<0?1:3))%SKIN.length]; ctx.beginPath(); ctx.arc(bx,-6,4.8,0,7); ctx.fill();                              // bearer head
+        ctx.fillStyle=cl.hot?'#c9a84c':CHEER[((((cl.ph|0)+end+2)%CHEER.length)+CHEER.length)%CHEER.length]; roundRect(bx-4.8,-3,9.6,13,2.5); ctx.fill();  // bearer body
+        ctx.strokeStyle='#3a3a42'; ctx.lineWidth=3; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(bx,-2); ctx.lineTo(bx+sway,pyTop); ctx.stroke();  // tall pole
+        ctx.save(); ctx.translate(bx+sway,pyTop); const segs=8, flen=56*end, fh=30;                                                               // BIG waving flag streaming off the pole top
+        for(let s=0;s<segs;s++){ const x0=flen*s/segs, x1=flen*(s+1)/segs, wob=13*s/segs, y0=Math.sin(now*0.009+cl.ph+s*0.8)*wob, y1=Math.sin(now*0.009+cl.ph+(s+1)*0.8)*wob;
+          ctx.fillStyle = cl.hot ? ((s%2)?'#f4f4f4':'#141414') : ((s%2)?(TH().crowd==='egypt'?'#caa25c':COL.cyan):COL.gold);
+          ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.lineTo(x1,y1+fh); ctx.lineTo(x0,y0+fh); ctx.closePath(); ctx.fill(); }
+        ctx.restore(); }
+      if(hype){ ctx.globalCompositeOperation='lighter'; for(let f=0;f<cl.n*2;f++){ ctx.globalAlpha=0.5+0.5*Math.sin(now*0.012+f*3); ctx.fillStyle=CHEER[f%CHEER.length]; const fx2=(f-cl.n)*9, fy2=-24-((now*0.05+f*40)%28); ctx.fillRect(fx2,fy2,3,3); } ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over'; }   // confetti
+      ctx.restore(); }
+  }
+  function drawProps(){ const now=performance.now(); const bs=BSTYLE[TH().build]||BSTYLE.neon, WALL=night?bs.nWall:bs.wall, PARA=night?bs.nParapet:bs.parapet, BST=bs.sign;
     const vis=[]; for(const b of props){ const dx=b.x-car.x, dy=b.y-car.y; if(Math.abs(dx)>1220||Math.abs(dy)>920)continue; vis.push({b,dx,dy,d:dx*dx+dy*dy}); }
     vis.sort((A,B)=>B.d-A.d);
     for(const v of vis){ const b=v.b, k=b.h3d/CAM3D, ox=v.dx*k, oy=v.dy*k, tp=b.taper||1;
@@ -826,8 +985,8 @@
       const roof=cor.map(c=>({x:b.x+(c.x-b.x)*tp+ox, y:b.y+(c.y-b.y)*tp+oy}));   // tapered + raised roof (setback = less boxy)
       if(lite){   // LITE: cheap neon box — ground shadow + raised roof rect + edge (no image/windows/walls)
         ctx.globalAlpha=0.3; ctx.fillStyle='#000'; ctx.beginPath(); cor.forEach((c,e)=>e?ctx.lineTo(c.x,c.y):ctx.moveTo(c.x,c.y)); ctx.closePath(); ctx.fill(); ctx.globalAlpha=1;
-        ctx.fillStyle=night?['#181040','#1e1042','#101a40'][b.hue]:['#2a2050','#301a42','#20284e'][b.hue]; ctx.beginPath(); roof.forEach((c,e)=>e?ctx.lineTo(c.x,c.y):ctx.moveTo(c.x,c.y)); ctx.closePath(); ctx.fill();
-        ctx.strokeStyle=night?'rgba(76,224,224,.55)':'rgba(201,168,76,.5)'; ctx.lineWidth=2; ctx.stroke();
+        ctx.fillStyle=WALL[b.hue%WALL.length]; ctx.beginPath(); roof.forEach((c,e)=>e?ctx.lineTo(c.x,c.y):ctx.moveTo(c.x,c.y)); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle=PARA; ctx.lineWidth=2; ctx.stroke();
         continue;
       }
       // ground shadow
@@ -835,25 +994,50 @@
       const offLen=Math.hypot(ox,oy)||1, odx=ox/offLen, ody=oy/offLen;
       for(let e=0;e<4;e++){ const c1=cor[e],c2=cor[(e+1)%4], r1=roof[e], r2=roof[(e+1)%4];
         // wall with grounded AO gradient (dark at street → lighter up top)
-        ctx.fillStyle=night?['#150e2e','#1a0e34','#101630'][b.hue]:['#241a44','#281640','#1a2244'][b.hue];   // flat wall (no per-frame gradient)
+        ctx.fillStyle=WALL[b.hue%WALL.length];   // themed wall base (neon / sandstone / victorian pastel)
         ctx.beginPath(); ctx.moveTo(c1.x,c1.y);ctx.lineTo(c2.x,c2.y);ctx.lineTo(r2.x,r2.y);ctx.lineTo(r1.x,r1.y);ctx.closePath(); ctx.fill();
+        const wg=ctx.createLinearGradient((c1.x+c2.x)/2,(c1.y+c2.y)/2,(r1.x+r2.x)/2,(r1.y+r2.y)/2); wg.addColorStop(0,'rgba(0,0,0,.42)'); wg.addColorStop(.55,'rgba(0,0,0,.10)'); wg.addColorStop(1,'rgba(255,255,255,.07)'); ctx.fillStyle=wg; ctx.fill();   // AO depth: dark at street → light at the roof lip (kills the flat-box look)
         // windowed FACADE on the faces we see well (edge roughly perpendicular to the extrusion)
         const ex=c2.x-c1.x, ey=c2.y-c1.y, el=Math.hypot(ex,ey)||1, dotp=Math.abs((ex/el)*odx+(ey/el)*ody);
         if(dotp<0.74 && offLen>14 && v.d<1000*1000){ const bil=(s,t)=>{ const bx=c1.x+ex*s, by=c1.y+ey*s, tx=r1.x+(r2.x-r1.x)*s, ty=r1.y+(r2.y-r1.y)*s; return {x:bx+(tx-bx)*t, y:by+(ty-by)*t}; };
           const floors=Math.max(3,Math.min(7,Math.round(offLen/15))), cols=Math.max(2,Math.min(5,Math.round(el/22))), seed=(b.w*3+b.h)|0;
           for(let f=0;f<floors;f++){ const t0=(f+0.24)/floors,t1=(f+0.76)/floors;
             for(let c=0;c<cols;c++){ const s0=(c+0.2)/cols,s1=(c+0.8)/cols, q=(f*7+c*13+seed)%5;
-              ctx.fillStyle = night?(q===0?'rgba(255,216,146,.98)':q===1?'rgba(255,216,146,.64)':q===2?'rgba(76,224,224,.55)':q===3?'rgba(232,120,200,.42)':'rgba(8,6,20,.5)'):(q<3?'rgba(190,212,255,.46)':'rgba(0,0,0,.26)');
+              ctx.fillStyle = (BST==='neon')?(night?(q===0?'rgba(255,216,146,.98)':q===1?'rgba(255,216,146,.64)':q===2?'rgba(76,224,224,.55)':q===3?'rgba(232,120,200,.42)':'rgba(8,6,20,.5)'):(q<3?'rgba(190,212,255,.46)':'rgba(0,0,0,.26)')):(night?(q<2?bs.nWin:'rgba(12,8,5,.5)'):(q<3?bs.win:'rgba(0,0,0,.26)'));
               const A=bil(s0,t0),B=bil(s1,t0),C=bil(s1,t1),D=bil(s0,t1); ctx.beginPath(); ctx.moveTo(A.x,A.y);ctx.lineTo(B.x,B.y);ctx.lineTo(C.x,C.y);ctx.lineTo(D.x,D.y);ctx.closePath(); ctx.fill(); } } }
         // parapet edge (bright roof lip)
-        ctx.strokeStyle=night?'rgba(76,224,224,.55)':'rgba(201,168,76,.5)'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(r1.x,r1.y); ctx.lineTo(r2.x,r2.y); ctx.stroke(); }
-      // ROOF art (tapered, raised)
-      const img=ROOF[((b.hue*7+(b.w|0)*3)%8+8)%8];
-      ctx.save(); ctx.translate(b.x+ox,b.y+oy); ctx.rotate(b.a);
-      if(img.complete && img.naturalWidth){ if(!night)ctx.globalAlpha=0.92; ctx.drawImage(img,-hw*tp,-hh*tp,b.w*tp,b.h*tp); ctx.globalAlpha=1; }
-      else { ctx.fillStyle=night?'#160d20':'#241a3e'; ctx.fillRect(-hw*tp,-hh*tp,b.w*tp,b.h*tp); }
+        ctx.strokeStyle=PARA; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(r1.x,r1.y); ctx.lineTo(r2.x,r2.y); ctx.stroke(); }
+      // ROOF (tapered, raised, ROUNDED corners for a soft PS3 read — not a hard Nintendo box)
+      ctx.save(); ctx.translate(b.x+ox,b.y+oy); ctx.rotate(b.a); const rw=b.w*tp, rh=b.h*tp, rr=Math.min(rw,rh)*0.20;
+      if(bs.roofImg){ const img=ROOF[((b.hue*7+(b.w|0)*3)%8+8)%8];
+        ctx.save(); roundRect(-rw/2,-rh/2,rw,rh,rr); ctx.clip();
+        if(img.complete && img.naturalWidth){ if(!night)ctx.globalAlpha=0.92; ctx.drawImage(img,-rw/2,-rh/2,rw,rh); ctx.globalAlpha=1; }
+        else { ctx.fillStyle=night?'#160d20':'#241a3e'; ctx.fillRect(-rw/2,-rh/2,rw,rh); } ctx.restore(); }
+      else { ctx.fillStyle=night?bs.nRoofCol:bs.roofCol; roundRect(-rw/2,-rh/2,rw,rh,rr); ctx.fill();
+        if(bs.pyramidRoof && ((b.w|0)%2===0)){   // some Egypt buildings get a mastaba/pyramid top — 4 shaded triangles to a center apex
+          ctx.save(); roundRect(-rw/2,-rh/2,rw,rh,rr); ctx.clip(); const sh=night?['#6a5730','#54431f','#463714','#5a4820']:['#e0c47f','#caa25c','#9a7638','#b88f48'], cn=[[-rw/2,-rh/2],[rw/2,-rh/2],[rw/2,rh/2],[-rw/2,rh/2]];
+          for(let i=0;i<4;i++){ const a=cn[i],c=cn[(i+1)%4]; ctx.fillStyle=sh[i]; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(a[0],a[1]); ctx.lineTo(c[0],c[1]); ctx.closePath(); ctx.fill(); } ctx.restore(); }
+        else if(bs.pitched){   // Victorian pitched-roof ridge cue
+          ctx.save(); roundRect(-rw/2,-rh/2,rw,rh,rr); ctx.clip(); ctx.fillStyle='rgba(0,0,0,.2)'; ctx.beginPath(); ctx.moveTo(-rw/2,-rh/2);ctx.lineTo(0,0);ctx.lineTo(rw/2,-rh/2);ctx.closePath(); ctx.fill(); ctx.beginPath(); ctx.moveTo(-rw/2,rh/2);ctx.lineTo(0,0);ctx.lineTo(rw/2,rh/2);ctx.closePath(); ctx.fill();
+          ctx.strokeStyle='rgba(255,255,255,.25)'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(-rw/2,0);ctx.lineTo(rw/2,0);ctx.stroke(); ctx.restore(); }
+        else { ctx.strokeStyle='rgba(120,90,50,.35)'; ctx.lineWidth=1; roundRect(-rw*0.34,-rh*0.34,rw*0.68,rh*0.68,rr*0.6); ctx.stroke(); } }
+      // ROUNDED CORNICE rim-light + accent trim + a little rooftop unit = drip / depth
+      ctx.strokeStyle=PARA; ctx.lineWidth=2.6; ctx.lineJoin='round'; roundRect(-rw/2,-rh/2,rw,rh,rr); ctx.stroke();
+      ctx.globalAlpha=0.55; ctx.strokeStyle=BST==='neon'?SIGNCOL[b.hue%4]:(BST==='stone'?'rgba(201,168,76,.7)':'rgba(255,255,255,.7)'); ctx.lineWidth=1.4; roundRect(-rw/2+4,-rh/2+4,rw-8,rh-8,Math.max(1,rr-3)); ctx.stroke(); ctx.globalAlpha=1;   // accent trim ring
+      if(!bs.roofImg && rw>62){ ctx.fillStyle=night?'rgba(255,255,255,.07)':'rgba(0,0,0,.10)'; roundRect(-rw*0.24,-rh*0.22,rw*0.22,rh*0.18,3); ctx.fill(); }   // rooftop AC/water unit
       // rooftop NEON SIGN strip (some buildings) — no blur
-      if(((b.w|0)%3)===0){ ctx.globalAlpha=night?0.9:0.5; ctx.fillStyle=SIGNCOL[b.hue%4]; ctx.fillRect(-hw*tp*0.55,-hh*tp*0.82,hw*tp*1.1,4); ctx.globalAlpha=1; }
+      if(BST==='neon' && ((b.w|0)%3)===0){ ctx.globalAlpha=night?0.9:0.5; ctx.fillStyle=SIGNCOL[b.hue%4]; ctx.fillRect(-hw*tp*0.55,-hh*tp*0.82,hw*tp*1.1,4); ctx.globalAlpha=1; }
+      // STOREFRONT SIGN — lit board with the (made-up) shop name
+      if(b.name && v.d<860*860){ const fs=Math.max(9,Math.min(19,b.w*tp*0.15)); ctx.font='900 '+fs+'px Trebuchet MS'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        const tw=Math.min(b.w*tp*1.1, ctx.measureText(b.name).width+14), th=fs+7, sy=-hh*tp*0.5, sc=SIGNCOL[b.hue%4];
+        let bF,bS,tC,glow=false;   // sign board style per theme: neon glow / carved stone / painted
+        if(BST==='stone'){ bF=night?'rgba(58,42,22,.88)':'#d8ba7e'; bS=night?'#c2a066':'#8a6a3a'; tC=night?'#e8cf96':'#4a3418'; }
+        else if(BST==='paint'){ bF=night?'rgba(28,30,40,.88)':'#f4f0e6'; bS=night?'#9fb0c4':'#3a3a44'; tC=night?'#f0f0f0':'#2a2a34'; }
+        else { bF='rgba(8,6,20,0.82)'; bS=sc; tC=night?sc:'#f4ecd8'; glow=night; }
+        ctx.globalAlpha=night?0.97:0.9; ctx.fillStyle=bF; roundRect(-tw/2,sy-th/2,tw,th,4); ctx.fill();
+        ctx.strokeStyle=bS; ctx.lineWidth=1.5; roundRect(-tw/2,sy-th/2,tw,th,4); ctx.stroke();
+        ctx.fillStyle=tC; if(glow){ctx.shadowColor=sc;ctx.shadowBlur=7;} ctx.fillText(b.name,0,sy); ctx.shadowBlur=0;
+        ctx.textAlign='left'; ctx.textBaseline='alphabetic'; ctx.globalAlpha=1; }
       // blinking red antenna BEACON on taller buildings — no blur
       if(b.h3d>340 && night){ const blink=0.4+0.6*Math.abs(Math.sin(now*0.004+b.x*0.017)); ctx.globalAlpha=blink; ctx.fillStyle='#ff5b5b'; ctx.beginPath(); ctx.arc(hw*tp*0.32,-hh*tp*0.34,3.6,0,7); ctx.fill(); ctx.globalAlpha=1; }
       ctx.restore();
@@ -918,26 +1102,166 @@
       ctx.restore(); }
     ctx.globalAlpha=1; }
 
+  // ===================== THEMED WORLD SET-PIECES =====================
+  function buildThemeDecor(){   // (landmarks/deco already cleared in buildTrack; POIs are added there before this runs)
+    if(curTheme!=='egypt' && curTheme!=='sf')return;
+    let mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9; for(const p of TRACK){ if(p.x<mnx)mnx=p.x; if(p.x>mxx)mxx=p.x; if(p.y<mny)mny=p.y; if(p.y>mxy)mxy=p.y; }
+    const cx=(mnx+mxx)/2, cy=(mny+mxy)/2, rad=Math.max(mxx-mnx,mxy-mny)/2;
+    if(curTheme==='egypt'){
+      // distant Great Pyramid cluster in the infield (backdrop when you cross the far side)
+      landmarks.push({k:'pyramid',x:cx-rad*0.34,y:cy-rad*0.06,s:rad*0.66});
+      landmarks.push({k:'pyramid',x:cx+rad*0.02,y:cy-rad*0.26,s:rad*0.46});
+      landmarks.push({k:'pyramid',x:cx+rad*0.30,y:cy+rad*0.10,s:rad*0.34});
+      // GIANT roadside Sphinx you blow right PAST + a big roadside pyramid, just off the track
+      const si=Math.round(TN*0.14), sp=TRACK[si], sn=NRM[si], stg=Math.atan2(TRACK[(si+2)%TN].y-sp.y,TRACK[(si+2)%TN].x-sp.x);
+      landmarks.push({k:'sphinx', x:sp.x+sn.x*(ROAD_W*0.5+300), y:sp.y+sn.y*(ROAD_W*0.5+300), s:rad*0.42, rot:stg});
+      const pi=Math.round(TN*0.62), pp=TRACK[pi], pn=NRM[pi]; landmarks.push({k:'pyramid', x:pp.x+pn.x*(ROAD_W*0.5+380), y:pp.y+pn.y*(ROAD_W*0.5+380), s:rad*0.52});
+      for(let i=0;i<TN;i+=9){ const p=TRACK[i],n=NRM[i]; for(const sd of [1,-1]){ const off=ROAD_W*0.5+140+((i*7)%70);
+        deco.push({k:((i*3)%2?'palm':'obelisk'), x:p.x+n.x*off*sd, y:p.y+n.y*off*sd, ph:i*0.3}); } }
+    } else {   // sf
+      landmarks.push({k:'goldengate', idx:Math.round(TN*0.5), span:26});
+      for(let i=0;i<TN;i+=8){ const p=TRACK[i],n=NRM[i]; for(const sd of [1,-1]){ const off=ROAD_W*0.5+120+((i*11)%64);
+        deco.push({k:((i%3)?'tree':'pole'), x:p.x+n.x*off*sd, y:p.y+n.y*off*sd, ph:i*0.3}); } }
+    }
+  }
+  function drawLandmarks(){ if(!landmarks.length)return;
+    for(const L of landmarks){ if(L.k==='goldengate'){ drawGoldenGate(L); continue; }
+      const dx=L.x-car.x,dy=L.y-car.y; if(dx*dx+dy*dy>3000*3000)continue;
+      if(L.k==='pyramid') drawPyramid(L.x,L.y,L.s); else if(L.k==='sphinx') drawSphinx(L.x,L.y,L.s,L.rot);
+      else if(L.k==='park') drawPark(L); else if(L.k==='lake') drawLake(L); else if(L.k==='school') drawSchool(L);
+      else if(L.k==='gas') drawGasStation(L); else if(L.k==='stadium') drawStadium(L); }
+  }
+  function drawGasStation(L){ const R=L.s; ctx.save(); ctx.translate(L.x,L.y); ctx.rotate(L.rot||0);
+    ctx.globalAlpha=0.34; ctx.fillStyle='#000'; roundRect(-R*0.98,-R*0.58,R*2,R*1.2,R*0.12); ctx.fill(); ctx.globalAlpha=1;
+    ctx.fillStyle=night?'#20222a':'#5a5e66'; roundRect(-R,-R*0.6,R*2,R*1.24,R*0.12); ctx.fill();   // forecourt
+    const sw=R*0.6,sh=R*0.5; ctx.fillStyle=night?'#2a2438':'#c9b06a'; roundRect(R*0.36,-sh/2,sw,sh,6); ctx.fill(); ctx.strokeStyle=night?'#4CE0E0':'#8a6a3a'; ctx.lineWidth=2; roundRect(R*0.36,-sh/2,sw,sh,6); ctx.stroke();   // shop
+    ctx.fillStyle=night?'#ffd892':'#cfe0ff'; ctx.fillRect(R*0.44,-sh*0.2,sw*0.5,sh*0.4);
+    const cw=R*0.92,ch=R*0.72; ctx.fillStyle='#c43b3b'; roundRect(-R*0.92,-ch/2,cw,ch,8); ctx.fill(); ctx.fillStyle=COL.gold; roundRect(-R*0.92,-ch/2,cw,ch*0.16,8); ctx.fill();   // red canopy + gold band
+    ctx.globalAlpha=0.4; ctx.strokeStyle='#fff'; ctx.lineWidth=2; roundRect(-R*0.92,-ch/2,cw,ch,8); ctx.stroke(); ctx.globalAlpha=1;
+    for(const px of [-R*0.62,-R*0.22]){ ctx.fillStyle=night?'#3a3a44':'#e8e8ee'; roundRect(px,-R*0.08,R*0.1,R*0.16,2); ctx.fill(); ctx.fillStyle=COL.cyan; ctx.fillRect(px+R*0.02,-R*0.05,R*0.06,R*0.05); }   // pumps
+    ctx.strokeStyle='#8a8a92'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(R*0.86,-R*0.2); ctx.lineTo(R*0.86,-R*0.54); ctx.stroke(); ctx.fillStyle=COL.gold; roundRect(R*0.72,-R*0.68,R*0.3,R*0.17,3); ctx.fill(); ctx.fillStyle='#0a0a12'; ctx.font='900 '+Math.max(6,R*0.085)+'px Trebuchet MS'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('24.9e',R*0.87,-R*0.595); ctx.textAlign='left'; ctx.textBaseline='alphabetic';   // fuel sign
+    ctx.restore(); }
+  function drawStadium(L){ const R=L.s; ctx.save(); ctx.translate(L.x,L.y); ctx.rotate(L.rot||0);
+    ctx.globalAlpha=0.34; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(0,R*0.05,R*1.16,R*0.92,0,0,7); ctx.fill(); ctx.globalAlpha=1;
+    ctx.fillStyle=night?'#2a2c38':'#8a8e98'; ctx.beginPath(); ctx.ellipse(0,0,R*1.1,R*0.86,0,0,7); ctx.fill();   // outer structure
+    ctx.fillStyle=night?'#3a3d4a':'#b0b4be'; ctx.beginPath(); ctx.ellipse(0,0,R*0.98,R*0.76,0,0,7); ctx.fill();
+    ctx.fillStyle=night?'#232634':'#6a6e78'; ctx.beginPath(); ctx.ellipse(0,0,R*0.82,R*0.62,0,0,7); ctx.fill();   // seating bowl
+    for(let i=0;i<44;i++){ const a=i/44*Math.PI*2, rr=0.72+((i*7)%20)/100; ctx.globalAlpha=0.5; ctx.fillStyle=CHEER[i%CHEER.length]; ctx.beginPath(); ctx.arc(Math.cos(a)*R*0.9*rr, Math.sin(a)*R*0.7*rr, R*0.02,0,7); ctx.fill(); } ctx.globalAlpha=1;   // crowd speckle
+    ctx.fillStyle=night?'#1e3a20':'#3f8040'; ctx.beginPath(); ctx.ellipse(0,0,R*0.62,R*0.44,0,0,7); ctx.fill();   // field
+    ctx.strokeStyle='rgba(255,255,255,.6)'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(0,-R*0.44); ctx.lineTo(0,R*0.44); ctx.stroke(); ctx.beginPath(); ctx.arc(0,0,R*0.12,0,7); ctx.stroke(); ctx.beginPath(); ctx.ellipse(0,0,R*0.6,R*0.42,0,0,7); ctx.stroke();
+    for(let i=0;i<4;i++){ const a=Math.PI/4+i*Math.PI/2, lx=Math.cos(a)*R*1.02, ly=Math.sin(a)*R*0.8; ctx.strokeStyle='#8a8a92'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(lx,ly); ctx.lineTo(lx*0.86,ly*0.86); ctx.stroke(); ctx.fillStyle=night?'#fff8d0':'#eef0f4'; roundRect(lx-R*0.06,ly-R*0.04,R*0.12,R*0.08,1); ctx.fill(); if(night){ ctx.globalAlpha=0.3; ctx.fillStyle='#fff8d0'; ctx.beginPath(); ctx.arc(lx,ly,R*0.14,0,7); ctx.fill(); ctx.globalAlpha=1; } }   // floodlights
+    ctx.restore(); }
+  function drawLake(L){ const R=L.s, now=performance.now(); ctx.save(); ctx.translate(L.x,L.y); ctx.rotate(L.rot||0);
+    ctx.globalAlpha=0.9; ctx.fillStyle=night?'#22301c':'#5f7038'; ctx.beginPath(); ctx.ellipse(0,0,R*1.1,R*0.82,0,0,7); ctx.fill(); ctx.globalAlpha=1;   // grassy shore
+    ctx.fillStyle=night?'#0f2a3c':'#2c6a86'; ctx.beginPath(); ctx.ellipse(0,0,R*0.92,R*0.66,0,0,7); ctx.fill();
+    ctx.fillStyle=night?'#173e56':'#3a809c'; ctx.beginPath(); ctx.ellipse(0,0,R*0.7,R*0.5,0,0,7); ctx.fill();
+    ctx.globalAlpha=0.2; ctx.strokeStyle='#bfe6f4'; ctx.lineWidth=3; for(let s=0;s<4;s++){ ctx.beginPath(); ctx.ellipse(0,(s-1.5)*R*0.16,R*0.55,R*0.05,0,0,7); ctx.stroke(); } ctx.globalAlpha=1;   // shimmer
+    ctx.fillStyle=night?'#3a2a1a':'#7a5230'; ctx.fillRect(-R*0.06,-R*0.78,R*0.12,R*0.3);   // little dock
+    if(TH().palms){ for(const sx of [-1,1]){ ctx.save(); ctx.translate(sx*R*0.82,-R*0.5); ctx.fillStyle='#6b4a28'; ctx.fillRect(-2,-4,4,10); ctx.fillStyle='#3f8a3a'; for(let f=0;f<6;f++){ ctx.save(); ctx.rotate(f/6*Math.PI*2); ctx.beginPath(); ctx.ellipse(0,-12,4,12,0,0,7); ctx.fill(); ctx.restore(); } ctx.restore(); } }   // oasis palms in Egypt
+    ctx.restore(); }
+  function drawPark(L){ const R=L.s; ctx.save(); ctx.translate(L.x,L.y); ctx.rotate(L.rot||0);
+    ctx.globalAlpha=0.34; ctx.fillStyle='#000'; roundRect(-R*0.98,-R*0.68,R*2,R*1.4,R*0.2); ctx.fill(); ctx.globalAlpha=1;
+    ctx.fillStyle=night?'#1e3a20':'#3f7a3a'; roundRect(-R,-R*0.72,R*2,R*1.44,R*0.2); ctx.fill();
+    ctx.fillStyle=night?'#244824':'#4a8a44'; roundRect(-R*0.94,-R*0.66,R*1.88,R*1.32,R*0.18); ctx.fill();
+    ctx.strokeStyle=night?'#3a3226':'#c2b083'; ctx.lineWidth=R*0.1; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(-R*0.9,0); ctx.lineTo(R*0.9,0); ctx.moveTo(0,-R*0.6); ctx.lineTo(0,R*0.6); ctx.stroke();   // paths
+    ctx.fillStyle=night?'#0f2a3c':'#2c6a86'; ctx.beginPath(); ctx.arc(0,0,R*0.16,0,7); ctx.fill(); ctx.strokeStyle='#c2b083'; ctx.lineWidth=2; ctx.stroke();   // central pond
+    for(let i=0;i<9;i++){ const a=i/9*Math.PI*2+0.3, tx=Math.cos(a)*R*0.62, ty=Math.sin(a)*R*0.44;
+      ctx.globalAlpha=0.2; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(tx+2,ty+3,R*0.12,R*0.07,0,0,7); ctx.fill(); ctx.globalAlpha=1;
+      ctx.fillStyle=night?'#234f2c':'#2f6b3a'; ctx.beginPath(); ctx.arc(tx,ty,R*0.12,0,7); ctx.fill(); ctx.fillStyle=night?'#2e5f38':'#3f8048'; ctx.beginPath(); ctx.arc(tx-R*0.03,ty-R*0.03,R*0.07,0,7); ctx.fill(); }   // trees
+    ctx.restore(); }
+  function drawSchool(L){ const R=L.s; ctx.save(); ctx.translate(L.x,L.y); ctx.rotate(L.rot||0);
+    ctx.globalAlpha=0.34; ctx.fillStyle='#000'; roundRect(-R*0.98,-R*0.66,R*2,R*1.4,R*0.14); ctx.fill(); ctx.globalAlpha=1;
+    ctx.fillStyle=night?'#20222a':'#4a4e58'; roundRect(-R,-R*0.7,R*2,R*1.4,R*0.14); ctx.fill();   // schoolyard asphalt
+    ctx.strokeStyle='rgba(255,214,110,.55)'; ctx.lineWidth=2; roundRect(-R*0.88,-R*0.32,R*0.66,R*0.64,4); ctx.stroke(); ctx.beginPath(); ctx.arc(-R*0.55,0,R*0.12,0,7); ctx.stroke(); ctx.beginPath(); ctx.moveTo(-R*0.55,-R*0.32); ctx.lineTo(-R*0.55,R*0.32); ctx.stroke();   // basketball court
+    const bw=R*0.92,bh=R*0.72,bx0=R*0.02; ctx.fillStyle=night?'#5a3a2a':'#b06a44'; roundRect(bx0,-bh/2,bw,bh,8); ctx.fill();
+    const wg=ctx.createLinearGradient(0,bh/2,0,-bh/2); wg.addColorStop(0,'rgba(0,0,0,.3)'); wg.addColorStop(1,'rgba(255,255,255,.06)'); ctx.fillStyle=wg; roundRect(bx0,-bh/2,bw,bh,8); ctx.fill();
+    ctx.strokeStyle=night?'#7a5238':'#d08a5a'; ctx.lineWidth=2; roundRect(bx0,-bh/2,bw,bh,8); ctx.stroke();
+    ctx.fillStyle=night?'#ffd892':'#cfe0ff'; for(let i=0;i<4;i++){ ctx.fillRect(bx0+bw*0.12+i*bw*0.2,-bh*0.15,bw*0.11,bh*0.36); }   // windows
+    ctx.fillStyle=night?'#2a1c10':'#5a3420'; ctx.fillRect(bx0+bw*0.44,bh*0.06,bw*0.14,bh*0.42);   // door
+    ctx.fillStyle='#f4ece0'; roundRect(bx0+bw*0.22,-bh*0.45,bw*0.56,bh*0.19,2); ctx.fill(); ctx.fillStyle='#2a2a34'; ctx.font='900 '+Math.max(7,R*0.085)+'px Trebuchet MS'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('SCHOOL',bx0+bw*0.5,-bh*0.355); ctx.textAlign='left'; ctx.textBaseline='alphabetic';   // SCHOOL sign
+    ctx.strokeStyle='#8a8a92'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(-R*0.9,-R*0.5); ctx.lineTo(-R*0.9,-R*0.86); ctx.stroke(); ctx.fillStyle=COL.gold; ctx.fillRect(-R*0.9,-R*0.86,R*0.16,R*0.09);   // flagpole
+    ctx.restore(); }
+  function drawPyramid(x,y,s){ const h=s*0.5; ctx.save(); ctx.translate(x,y);
+    ctx.globalAlpha=0.28; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(h*0.14,h*0.16,h*1.12,h*1.0,0,0,7); ctx.fill(); ctx.globalAlpha=1;   // cast shadow (sun top-left)
+    const b=[[-h,0],[0,-h],[h,0],[0,h]];                                          // diamond corners (rotated square base, top-down)
+    const shade=night?['#5a4a34','#4a3c2a','#33291d','#40331f']:['#f2dca0','#e4c886','#c29a5e','#b0894f'];   // N,E,S,W faces lit from top-left
+    for(let i=0;i<4;i++){ const a=b[i],c=b[(i+1)%4]; ctx.fillStyle=shade[i]; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(a[0],a[1]); ctx.lineTo(c[0],c[1]); ctx.closePath(); ctx.fill(); }
+    ctx.strokeStyle=night?'rgba(18,12,6,.6)':'rgba(120,86,44,.55)'; ctx.lineWidth=Math.max(1.5,s*0.01); for(const c of b){ ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(c[0],c[1]); ctx.stroke(); }
+    ctx.fillStyle=night?'#6a5738':'#fbeec2'; ctx.beginPath(); ctx.arc(0,0,Math.max(2,s*0.022),0,7); ctx.fill();   // sunlit apex cap
+    ctx.restore(); }
+  function drawSphinx(x,y,s,rot){ ctx.save(); ctx.translate(x,y); ctx.rotate(rot!=null?rot:-0.35);
+    const bw=s*0.44, bl=s*1.15, sand=night?'#7a674a':'#dcc084', sand2=night?'#6a583d':'#cbad72', line=night?'rgba(18,12,6,.5)':'rgba(120,86,44,.5)';
+    ctx.globalAlpha=0.28; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(bw*0.2,bl*0.1,bw*1.2,bl*0.6,0,0,7); ctx.fill(); ctx.globalAlpha=1;
+    ctx.fillStyle=sand2; ctx.fillRect(-bw*0.46,-bl*0.5-bl*0.30,bw*0.30,bl*0.36); ctx.fillRect(bw*0.16,-bl*0.5-bl*0.30,bw*0.30,bl*0.36);   // outstretched front paws
+    ctx.fillStyle=sand; roundRect(-bw/2,-bl/2,bw,bl,bw*0.34); ctx.fill();                                                                 // body
+    ctx.fillStyle=night?'#8a7452':'#e6cf96'; ctx.beginPath(); ctx.arc(0,-bl*0.5,bw*0.52,0,7); ctx.fill();                                 // head
+    ctx.strokeStyle=line; ctx.lineWidth=1.4; for(let i=-2;i<=2;i++){ ctx.beginPath(); ctx.moveTo(i*bw*0.17,-bl*0.5-bw*0.44); ctx.lineTo(i*bw*0.17,-bl*0.5+bw*0.44); ctx.stroke(); }   // nemes headdress stripes
+    ctx.strokeStyle=line; ctx.lineWidth=2; roundRect(-bw/2,-bl/2,bw,bl,bw*0.34); ctx.stroke();
+    ctx.restore(); }
+  function drawGoldenGate(L){ const gi=L.idx, span=L.span||11, GG=night?'#c24a22':'#e35b2c', GGd=night?'#8f3616':'#b8461f';
+    const A=Math.max(0,gi-span), B=Math.min(TN-1,gi+span), now=performance.now();
+    const seg=fn=>{ ctx.beginPath(); for(let i=A;i<=B;i++){ const P=fn(i); i===A?ctx.moveTo(P.x,P.y):ctx.lineTo(P.x,P.y); } };
+    ctx.save(); ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.strokeStyle=night?'#0f2a3c':'#2c6a86'; ctx.lineWidth=ROAD_W+640; seg(i=>TRACK[i]); ctx.stroke();                    // bay water (wide)
+    ctx.strokeStyle=night?'#173e56':'#3a809c'; ctx.lineWidth=ROAD_W+430; seg(i=>TRACK[i]); ctx.stroke();
+    ctx.globalAlpha=0.16; ctx.strokeStyle='#bfe6f4'; ctx.lineWidth=4; for(let s=0;s<4;s++){ seg(i=>{ const p=TRACK[i],n=NRM[i],off=(s-1.5)*160+Math.sin(now*0.002+i*0.5+s)*18; return {x:p.x+n.x*off,y:p.y+n.y*off}; }); ctx.stroke(); } ctx.globalAlpha=1;   // shimmer
+    ctx.strokeStyle=GGd; ctx.lineWidth=ROAD_W+34; seg(i=>TRACK[i]); ctx.stroke();                                          // orange bridge deck
+    const towers=[]; for(let ti=A+4; ti<=B-2; ti+=14) towers.push(ti); if(towers.length<2)towers.push(A+3,B-3);            // tower every ~14 indices
+    for(const sd of [1,-1]){ ctx.strokeStyle=GG; ctx.lineWidth=6; seg(i=>{ const p=TRACK[i],n=NRM[i],off=(ROAD_W*0.5+16)*sd; return {x:p.x+n.x*off,y:p.y+n.y*off}; }); ctx.stroke();
+      ctx.lineWidth=3; ctx.beginPath(); let st=false;                                                                      // suspension cable SAGS between adjacent towers
+      for(let i=A;i<=B;i++){ let pT=towers[0],nT=towers[towers.length-1]; for(let k=0;k<towers.length-1;k++){ if(i>=towers[k]&&i<=towers[k+1]){ pT=towers[k]; nT=towers[k+1]; break; } }
+        const tt=nT>pT?(i-pT)/(nT-pT):0.5, sag=Math.sin(Math.max(0,Math.min(1,tt))*Math.PI)*42, p=TRACK[i],n=NRM[i], off=(ROAD_W*0.5+16+sag)*sd, X=p.x+n.x*off, Y=p.y+n.y*off; st?ctx.lineTo(X,Y):(ctx.moveTo(X,Y),st=true); }
+      ctx.stroke(); }
+    for(const ti of towers){ const p=TRACK[(ti+TN)%TN], n=NRM[(ti+TN)%TN];                                                // towers = orange bars across the road
+      ctx.strokeStyle=GG; ctx.lineWidth=14; ctx.beginPath(); ctx.moveTo(p.x-n.x*(ROAD_W*0.5+50),p.y-n.y*(ROAD_W*0.5+50)); ctx.lineTo(p.x+n.x*(ROAD_W*0.5+50),p.y+n.y*(ROAD_W*0.5+50)); ctx.stroke();
+      for(const sd of [1,-1]){ ctx.fillStyle=GGd; ctx.beginPath(); ctx.arc(p.x+n.x*(ROAD_W*0.5+50)*sd,p.y+n.y*(ROAD_W*0.5+50)*sd,10,0,7); ctx.fill(); } }
+    ctx.restore(); }
+  function drawDeco(){ if(lite || !deco.length)return; const now=performance.now();
+    for(const d of deco){ const dx=d.x-car.x,dy=d.y-car.y; if(dx*dx+dy*dy>1300*1300)continue; ctx.save(); ctx.translate(d.x,d.y);
+      if(d.k==='palm'){ ctx.globalAlpha=0.26; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(3,2,20,9,0,0,7); ctx.fill(); ctx.globalAlpha=1;
+        ctx.fillStyle='#6b4a28'; ctx.fillRect(-2.5,-4,5,9);
+        const sway=Math.sin(now*0.002+d.ph)*0.18; ctx.fillStyle=night?'#2c5e2b':'#3f8a3a';
+        for(let f=0;f<7;f++){ ctx.save(); ctx.rotate(f/7*Math.PI*2+sway); ctx.beginPath(); ctx.ellipse(0,-13,5,13,0,0,7); ctx.fill(); ctx.restore(); }
+        ctx.fillStyle='#2d6e2b'; ctx.beginPath(); ctx.arc(0,-2,4,0,7); ctx.fill(); }
+      else if(d.k==='obelisk'){ ctx.globalAlpha=0.28; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(2,2,9,5,0,0,7); ctx.fill(); ctx.globalAlpha=1;
+        ctx.fillStyle=night?'#8a7452':'#d8ba7e'; ctx.fillRect(-4,-5,8,10); ctx.fillStyle=night?'#7a6544':'#c2a067'; ctx.beginPath(); ctx.moveTo(-4,-5);ctx.lineTo(0,-11);ctx.lineTo(4,-5);ctx.closePath(); ctx.fill();
+        ctx.strokeStyle='rgba(110,80,40,.5)'; ctx.lineWidth=1; ctx.strokeRect(-4,-5,8,10); }
+      else if(d.k==='tree'){ ctx.globalAlpha=0.26; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(2,2,15,8,0,0,7); ctx.fill(); ctx.globalAlpha=1;
+        ctx.fillStyle=night?'#234f2c':'#2f6b3a'; ctx.beginPath(); ctx.arc(0,0,13,0,7); ctx.fill(); ctx.fillStyle=night?'#2e5f38':'#3f8048'; ctx.beginPath(); ctx.arc(-3,-3,8,0,7); ctx.fill(); }
+      else if(d.k==='pole'){ ctx.globalAlpha=0.22; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(1,1,5,3,0,0,7); ctx.fill(); ctx.globalAlpha=1;
+        ctx.fillStyle='#5a5a66'; ctx.fillRect(-1.5,-9,3,11); ctx.fillStyle='#c43b3b'; ctx.fillRect(-4,-10,8,3); }
+      ctx.restore(); }
+  }
   function draw(){
     ctx.clearRect(0,0,W,H);
+    const _t=TH();
     const bg=ctx.createRadialGradient(W/2,H*0.4,80,W/2,H*0.4,Math.max(W,H));
-    if(night){bg.addColorStop(0,'#1a1030');bg.addColorStop(1,'#05030a');}else{bg.addColorStop(0,'#3a2a5c');bg.addColorStop(1,'#160f28');}
+    bg.addColorStop(0,night?_t.nSkyIn:_t.skyIn); bg.addColorStop(1,night?_t.nSkyOut:_t.skyOut);
     ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+    if(_t.sun&&!night){ const sg=ctx.createRadialGradient(W*0.5,H*0.15,8,W*0.5,H*0.15,H*0.62); sg.addColorStop(0,'rgba(255,246,206,0.75)'); sg.addColorStop(0.35,'rgba(255,226,150,0.22)'); sg.addColorStop(1,'rgba(255,226,150,0)'); ctx.fillStyle=sg; ctx.fillRect(0,0,W,H); }   // Egypt sun haze
+    if(_t.fog&&!night){ ctx.fillStyle='rgba(210,220,230,0.10)'; ctx.fillRect(0,0,W,H); }   // SF marine-fog wash
     const sx=(shake>0)?(Math.random()-.5)*shake:0, sy=(shake>0)?(Math.random()-.5)*shake:0;
     // FIXED north-up camera (RC Pro Am / Super Sprint style) — follows the car, never rotates the world (no dizziness)
     const zm=0.7*(1+camPunch*camPunch*0.05);   // SUBTLE camera punch-zoom (≤5%) on boost ignition / big drift release — eases back out over ~0.5s
     ctx.save(); ctx.translate(W/2+sx,H/2+sy); ctx.scale(zm,zm); ctx.translate(-car.x,-car.y);
+    drawLandmarks();   // themed set-pieces (pyramids / sphinx / golden gate) — furthest back
     drawProps();
+    drawDeco();        // palms / obelisks / trees / cable-car poles along the road
+    drawCrowd();   // cheering roadside spectators on the shoulders
     ctx.lineCap='round'; ctx.lineJoin='round';
     const roadPath=()=>{ ctx.beginPath(); TRACK.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); if(!OPEN)ctx.closePath(); };
     if(WATER)drawWater();   // river under the bridge span (drawn behind the road so the road bridges it)
     if(night){ ctx.strokeStyle='rgba(76,224,224,0.12)'; ctx.lineWidth=ROAD_W+80; roadPath(); ctx.stroke(); }
-    ctx.strokeStyle=night?'#0d0a18':'#141026'; ctx.lineWidth=ROAD_W; roadPath(); ctx.stroke();
+    ctx.strokeStyle=night?_t.nRoad:_t.road; ctx.lineWidth=ROAD_W; roadPath(); ctx.stroke();
     if(wet&&!lite){ ctx.strokeStyle=night?'rgba(40,70,120,0.14)':'rgba(120,150,190,0.12)'; ctx.lineWidth=ROAD_W; roadPath(); ctx.stroke();   // wet gloss over the whole tarmac
       ctx.strokeStyle=night?'rgba(76,224,224,0.08)':'rgba(224,85,79,0.07)'; ctx.lineWidth=ROAD_W*0.9; roadPath(); ctx.stroke(); }  // neon reflection bleeding onto wet road
+    if(wet&&!lite){ ctx.save(); ctx.globalCompositeOperation='lighter'; const pn=performance.now();   // PS3 wet reflection STREAKS — neon sheen drifting along the tarmac
+      ctx.strokeStyle=night?'rgba(76,224,224,0.09)':'rgba(150,180,255,0.08)'; ctx.lineWidth=ROAD_W*0.40; ctx.setLineDash([120,540]); ctx.lineDashOffset=(-pn*0.22)%660; roadPath(); ctx.stroke();
+      ctx.strokeStyle=night?'rgba(230,245,255,0.10)':'rgba(255,255,255,0.11)'; ctx.lineWidth=ROAD_W*0.14; ctx.setLineDash([46,880]); ctx.lineDashOffset=(-pn*0.40)%926; roadPath(); ctx.stroke();
+      ctx.setLineDash([]); ctx.restore(); }
     ctx.strokeStyle=night?'rgba(120,150,200,0.05)':'rgba(255,255,255,0.05)'; ctx.lineWidth=ROAD_W*0.55; roadPath(); ctx.stroke();   // asphalt centre sheen
     drawPuddles();
-    ctx.strokeStyle=night?'rgba(201,168,76,.7)':'rgba(201,168,76,.45)'; ctx.lineWidth=4; ctx.setLineDash([30,46]); roadPath(); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle=_t.lane; ctx.lineWidth=4; ctx.setLineDash([30,46]); roadPath(); ctx.stroke(); ctx.setLineDash([]);
     drawBorders();
     for(const s of skid){ ctx.globalAlpha=s.a*0.6; ctx.fillStyle='#08080d'; ctx.beginPath(); ctx.arc(s.x,s.y,6,0,7); ctx.fill(); } ctx.globalAlpha=1;
     drawTurnGuide();
@@ -969,8 +1293,21 @@
     if(!lite && running && (car.boostT>0||(car.hyperT||0)>0)){ const k=Math.min(1,Math.max(car.boostT,car.hyperT||0));
       const eg=ctx.createRadialGradient(W/2,H/2,H*0.36,W/2,H/2,H*0.78); eg.addColorStop(0,'rgba(76,224,224,0)'); eg.addColorStop(1,'rgba(76,224,224,'+(0.14+0.14*k).toFixed(3)+')');
       ctx.fillStyle=eg; ctx.fillRect(0,0,W,H); }
+    postFX();      // PS3 HD bloom + boost zoom-blur (before HUD so text stays crisp)
     drawHUD();
   }
+  // PS3 HD ARCADE post-processing — additive bloom + radial zoom-blur on boost. Gated to !lite so LITE stays lean.
+  let _bloomCv=null,_bloomX=null;
+  function postFX(){ if(lite)return;
+    if(!_bloomCv){ _bloomCv=document.createElement('canvas'); _bloomX=_bloomCv.getContext('2d'); }
+    const bw=Math.max(1,cv.width>>1), bh=Math.max(1,cv.height>>1);
+    if(_bloomCv.width!==bw||_bloomCv.height!==bh){ _bloomCv.width=bw; _bloomCv.height=bh; }
+    _bloomX.setTransform(1,0,0,1,0,0); _bloomX.globalAlpha=1; _bloomX.globalCompositeOperation='source-over'; _bloomX.clearRect(0,0,bw,bh);
+    _bloomX.filter='blur('+(photo?6:4)+'px)'; _bloomX.drawImage(cv,0,0,bw,bh); _bloomX.filter='none';
+    ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=photo?0.46:0.34; ctx.drawImage(_bloomCv,0,0,W,H);
+    if(running&&(car.boostT>0||(car.hyperT||0)>0)){ const k=Math.min(1,Math.max(car.boostT,car.hyperT||0));   // radial zoom-blur on the M24.9e surge
+      for(let s=1;s<=3;s++){ const sc=1+s*0.04*k, ox=W/2*(1-sc), oy=H/2*(1-sc); ctx.globalAlpha=(0.2*k)/s; ctx.setTransform(DPR*sc,0,0,DPR*sc,DPR*ox,DPR*oy); ctx.drawImage(_bloomCv,0,0,W,H); } }
+    ctx.restore(); }
   // high-speed motion streaks — radial screen-space speed lines that ramp in past ~320mph (FULL/PHOTO only), cyan on boost. Bounded count.
   function drawSpeedLines(){
     if(lite||!running)return;
@@ -1053,7 +1390,7 @@
     loadTurn(PC); const tf=CARTURN[PC.id]; const hasTurn=spriteReady(tf);
     // pick the steered frame + CROSS-FADE on change so the wheels glide instead of clicking side-to-side
     let key='c', flip=false;
-    if(hasTurn && Math.abs(car.wheelSteer)>0.08){ key='t'; flip=car.wheelSteer<0; }   // wheels steer WITH the turn direction
+    if(hasTurn && Math.abs(car.wheelSteer)>0.08){ key='t'; flip=car.wheelSteer<0; if(PC.turnRev)flip=!flip; }   // wheels steer WITH the turn direction (turnRev cars have a mirror-drawn turn sprite → invert)
     key+=flip?'R':'L';
     const now=performance.now(), d=Math.min(0.05,(now-(car._ft||now))/1000); car._ft=now;
     if(key!==car._fkey){ car._fprev=car._fkey||key; car._fmix=1; car._fkey=key; }
@@ -1070,7 +1407,8 @@
     if(spriteReady(cImg)){
       // shadow + boost aura — on a JUMP the shadow shrinks & drops away while the body scales up (height read)
       const az=car.airZ||0;
-      ctx.globalAlpha=0.3*(1-az*0.6); ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(-2,car.bank*10+az*24,54*(1-az*0.4),26*(1-az*0.4),0,0,7); ctx.fill(); ctx.globalAlpha=1;
+      if(lite){ ctx.globalAlpha=0.3*(1-az*0.6); ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(-2,car.bank*10+az*24,54*(1-az*0.4),26*(1-az*0.4),0,0,7); ctx.fill(); ctx.globalAlpha=1; }
+      else softShadow(-2,car.bank*10+az*24+7,62*(1-az*0.4),31*(1-az*0.4),0.4*(1-az*0.6));   // PS3 soft contact shadow
       if(wet){ ctx.globalAlpha=0.32; ctx.fillStyle=car.boostT>0?'rgba(76,224,224,.6)':'rgba(150,180,255,.28)'; ctx.beginPath(); ctx.ellipse(-30,0,64,30,0,0,7); ctx.fill(); ctx.globalAlpha=1; }   // car's glow reflected on the wet tarmac
       if(car.boostT>0){ ctx.globalAlpha=0.4; ctx.fillStyle='rgba(76,224,224,.4)'; ctx.beginPath(); ctx.ellipse(-44,0,72,38,0,0,7); ctx.fill(); ctx.globalAlpha=1; }
       if(az>0)ctx.scale(1+az*0.62,1+az*0.62);   // lift toward the camera as it sails
@@ -1086,7 +1424,7 @@
     ctx.restore(); }
   function drawRival(r){ ctx.save(); ctx.translate(r.x,r.y); ctx.rotate(r.a);
     const c=CARS[r.carIdx||0], img=carSprite(c);
-    if(spriteReady(img)){ ctx.globalAlpha=0.32; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(0,0,50,26,0,0,7); ctx.fill(); ctx.globalAlpha=1; ctx.rotate(Math.PI/2); const w=1024*c.s*CARSCALE; ctx.drawImage(img,-w/2,-w/2,w,w); }
+    if(spriteReady(img)){ if(lite){ ctx.globalAlpha=0.32; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(0,0,50,26,0,0,7); ctx.fill(); ctx.globalAlpha=1; } else softShadow(0,7,56,29,0.4); ctx.rotate(Math.PI/2); const w=1024*c.s*CARSCALE; ctx.drawImage(img,-w/2,-w/2,w,w); }
     else { const V=VTYPE[r.type||0]; drawBody(V.sc,r.col.b,r.col.s,0,false,V.len,V.wid); }
     ctx.restore(); }
   // ERASER PATROL unit — black interceptor (ct6 base), chartreuse corruption underglow, flashing red/blue bar
@@ -1159,7 +1497,7 @@
     ctx.textAlign='left'; ctx.font='800 13px Trebuchet MS'; ctx.fillStyle=night?COL.cyan:COL.gold; ctx.fillText((night?'◐ NIGHT (2× M24.9e) [N]':'☀ DAY [N]')+(wet?'  ·  💧 WET [W]':'  ·  DRY [W]'),24,62);
     if(momo>1.03){ ctx.font='800 14px Trebuchet MS'; ctx.fillStyle=momo>1.30?COL.orange:COL.cyan; ctx.fillText('⚡ MOMENTUM x'+momo.toFixed(2),24,H-52); }
     ctx.font='700 12px Trebuchet MS'; ctx.fillStyle=assist?COL.cyan:'rgba(244,236,216,.4)'; ctx.fillText(assist?'➤ TURN GUIDE ON [T]':'TURN GUIDE OFF [T]',24,H-30);
-    ctx.fillStyle=photo?'rgba(76,224,224,.7)':'rgba(244,236,216,.4)'; ctx.fillText(photo?'📷 PHOTO [L]':lite?'⚡ LITE [L]':'✨ FULL [L]',180,H-30);
+    ctx.fillStyle=photo?'rgba(76,224,224,.7)':'rgba(244,236,216,.4)'; ctx.fillText(photo?'📷 PS3 PHOTO [L]':lite?'⚡ LITE [L]':'✨ PS3 HD [L]',180,H-30);
     if(nowPlaying){ ctx.textAlign='center'; ctx.font='700 12px Trebuchet MS'; ctx.fillStyle='rgba(201,168,76,.72)'; ctx.fillText('♪ '+nowPlaying+'   ·   [J] skip',W/2,22); }
     // countdown / GO
     if(phase==='countdown'){ const n=Math.max(1,Math.ceil(cdT)); ctx.textAlign='center'; ctx.font='900 130px Trebuchet MS'; ctx.fillStyle=COL.gold; ctx.shadowColor=COL.gold; ctx.shadowBlur=30; ctx.fillText(n,W/2,H*0.47); ctx.shadowBlur=0; ctx.font='800 20px Trebuchet MS'; ctx.fillStyle='#f4ecd8'; ctx.fillText('GET READY',W/2,H*0.47+58); }
@@ -1234,7 +1572,7 @@
   function buyUpg(key){ const lv=UPG[key]; if(lv>=UPG_MAX)return; const cost=UPG_COST[lv]; if(bank<cost){ beep(150,0.12,'square',0.2); return; }
     bank-=cost; UPG[key]=lv+1; applyUpg(); saveUpg(); renderUpg(); beep(720,0.09,'square',0.25); setTimeout(()=>beep(980,0.12,'square',0.25),80); }
   function cycleCar(d){ playerCar=(playerCar+CARS.length+d)%CARS.length; renderGarage(); beep(360+ (d>0?120:0),0.07,'square',0.18); }
-  const gfxBtn=document.getElementById('gfxBtn'); function updateGfx(){ gfxBtn.textContent='GRAPHICS: '+(photo?'PHOTO 📷':lite?'LITE ⚡':'FULL ✨'); }
+  const gfxBtn=document.getElementById('gfxBtn'); function updateGfx(){ gfxBtn.textContent='GRAPHICS: '+(photo?'PS3 PHOTO 📷':lite?'LITE ⚡':'PS3 HD ✨'); }
   gfxBtn.onclick=()=>{ gfxTier++; applyGfx(); beep(photo?620:lite?300:500,0.08,'square',0.2); }; applyGfx();
   document.getElementById('toGarage').onclick=()=>{ initAudio(); resumeAudio(); document.getElementById('menu').classList.add('hidden'); document.getElementById('garage').classList.remove('hidden'); renderGarage(); playMenuMusic(); };
   document.getElementById('carPrev').onclick=()=>cycleCar(-1);
