@@ -665,7 +665,7 @@
 
     const speedFactor=Math.min(1,spd/210), driftAuth=car.drifting?1.65:1.0; let steer=0; if(K.left)steer-=1; if(K.right)steer+=1;   // driftAuth = extra rotation while HOLDING space → the e-brake pivots into the corner, but SMOOTHLY (was 2.1 = too sharp/snappy). Still throws the tail; just more natural.
     if(T.joy)steer=Math.max(-1,Math.min(1,T.steerAxis));   // analog joystick (mobile) overrides — partial steering for smooth finger control
-    const hiK=Math.max(0,Math.min(1,(spd-330)/520));   // 0 at cruise → 1 near top speed: drives the high-speed STABILITY package below (keep the speed, gain the control)
+    const hiK=Math.max(0,Math.min(1,(spd-270)/430));   // recalibrated for MAXSPD=560/BOOST_MAX=800 (was 330/520 for old 680/980). Restores the intended hiK≈0.67 at cruising / 1.0 at boost — cures the "crazy steering" caused by the speed nerf leaving hiSpeedDamp too weak.
     // SMOOTH STEERING — ease the input toward full lock instead of snapping, so fast cornering stays
     // controllable and looks clean. Press eases in quick (responsive); at very high speed both directions
     // ease a touch softer so fast corrections are PRECISE, not nervous/jerky.
@@ -677,7 +677,7 @@
       car.a+=car.steerInput*2.9*sMul.turn(PC)*UMUL.turn*driftAuth*speedFactor*hiSpeedDamp*dt;   // *UMUL.turn = Handling upgrade
       if((car.driftHold||0)>0)car.driftHold-=dt;                                   // tap-drift window counts down
       car.drifting=(K.drift||(car.driftHold>0))&&spd>45;                           // handbrake grabs at almost any moving speed now (was 70) → activates every time you hold SPACE
-      if(car.drifting && !car._wasDrift && spd>110){ const dir=steer!==0?-steer:(vR>0?1:-1); vR+=Math.min(170,spd*0.24)*dir; }   // ENGAGE KICK: snap the rear loose the instant you grab the brake so the skate breaks out visibly EVERY time
+      if(car.drifting && !car._wasDrift && spd>90){ const dir=steer!==0?-steer:(vR>0?1:-1); vR+=Math.min(170,spd*0.24)*dir; }   // ENGAGE KICK: snap the rear loose the instant you grab the brake so the skate breaks out visibly EVERY time
       if(car.drifting && spd>90){ vR+=(-steer)*Math.min(spd*1.7,720)*dt;                              // TAIL STEER (Asphalt-style): HOLD the drift and steer INTO the slide to hang the tail out further, or COUNTER-STEER to wiggle it back and catch/regain control — a fully controllable, sustained skate you steer with the rear
         const maxSlide=Math.abs(vF)*0.85+130; if(vR>maxSlide)vR=maxSlide; else if(vR<-maxSlide)vR=-maxSlide; }   // clamp the slide angle so even a hard drift can always be reined in — never a full uncontrolled spin
     } else { car.drifting=false; }
@@ -708,13 +708,13 @@
     screechUpdate(car.drifting||hardCorner, Math.abs(vR)+(hardCorner?120:0));   // ONLY on real slides (e-brake drift or hard high-speed slip) — no more screech on every little turn
 
     const slip=Math.abs(vR);
-    if(car.drifting&&slip>60&&spd>200){ car.m=Math.min(100,car.m+(slip/900)*dt*38*(night?2:1));
+    if(car.drifting&&slip>60&&spd>165){ car.m=Math.min(100,car.m+(slip/900)*dt*38*(night?2:1));
       const smCol=car.driftCharge>2.0?'#8fe8e8':car.driftCharge>1.1?'#e0a468':null;   // TIERED smoke — heats up with the drift charge (white → amber → cyan)
       if(Math.random()<0.9)smoke.push({x:car.x-fx*30,y:car.y-fy*30,r:9+Math.random()*10,a:0.5,col:smCol,vx:-car.vx*0.05+(Math.random()-.5)*40,vy:-car.vy*0.05+(Math.random()-.5)*40});
       if(!lite&&Math.random()<0.7)smoke.push({x:car.x-fx*38+(Math.random()-.5)*20,y:car.y-fy*38+(Math.random()-.5)*20,r:7+Math.random()*7,a:0.42,col:smCol,vx:-car.vx*0.04+(Math.random()-.5)*60,vy:-car.vy*0.04+(Math.random()-.5)*60}); }   // denser PS3 billow on the hotter tiers (FULL/PHOTO only)
-    if(!car.offRoad&&spd>300)car.m=Math.min(100,car.m+dt*3*(night?2:1));
+    if(!car.offRoad&&spd>250)car.m=Math.min(100,car.m+dt*3*(night?2:1));
     // ===== DRIFT-BOOST (tiered mini-turbo): charge through the corner, LAUNCH out with a surge =====
-    if(car.drifting&&spd>160) car.driftCharge=Math.min(2.6,(car.driftCharge||0)+dt*(0.55+Math.min(1.6,slip/210)));
+    if(car.drifting&&spd>130) car.driftCharge=Math.min(2.6,(car.driftCharge||0)+dt*(0.55+Math.min(1.6,slip/210)));
     const dTier=car.driftCharge>2.0?3:car.driftCharge>1.1?2:car.driftCharge>0.45?1:0;
     if(car.drifting&&dTier>0&&Math.random()<0.7){ const sc=[null,'#f4ecd8',COL.orange,COL.cyan][dTier]; sparks.push({x:car.x-fx*24+(Math.random()-.5)*28,y:car.y-fy*24+(Math.random()-.5)*28,vx:-car.vx*0.05+(Math.random()-.5)*190,vy:-car.vy*0.05+(Math.random()-.5)*190,a:1,r:2+Math.random()*3,col:sc}); }
     if(car._wasDrift&&!car.drifting){ const tier=dTier;
@@ -874,7 +874,7 @@
       const ahead=ox*Math.cos(r.a)+oy*Math.sin(r.a); if(ahead>0&&ahead<220&&od<240)drafting=true; }   // a car right in front = slipstream
     { const ox=car.x-r.x,oy=car.y-r.y,od=Math.hypot(ox,oy)||1; if(od<115){ sepx-=ox/od*(115-od); sepy-=oy/od*(115-od); } }   // ease off the PLAYER too — race clean, don't just wall them off
     if(sepx||sepy){ let sa=Math.atan2(sepy,sepx),dsep=sa-desired; while(dsep>Math.PI)dsep-=2*Math.PI; while(dsep<-Math.PI)dsep+=2*Math.PI; desired+=Math.max(-0.45,Math.min(0.45,dsep))*0.55; }
-    let da=desired-r.a; while(da>Math.PI)da-=2*Math.PI; while(da<-Math.PI)da+=2*Math.PI; const turn=5.0*dt; r.a+=Math.max(-turn,Math.min(turn,da));   // faster turn response (4.4→5.0) — rivals catch lines quicker, especially on tight technical stages
+    let da=desired-r.a; while(da>Math.PI)da-=2*Math.PI; while(da<-Math.PI)da+=2*Math.PI; const turn=4.6*dt; r.a+=Math.max(-turn,Math.min(turn,da));   // moderate turn boost (4.4→4.6) — quicker line-catch than original but less erratic than 5.0
     const pProg=car.lap*TN+nearestTrack(car.x,car.y).idx, rProg=r.lap*TN+nr; let spd=r.speed+(pProg-rProg)*0.42; spd=Math.max(r.speed-rivalDrop,Math.min(r.speed+rivalCatch,spd));   // harder diffs: chase harder, ease off less when leading
     // NITRO PUSH — rivals burn their OWN boost on the straights so they actually RACE you (pull away → force a chase) instead of cruising
     r.nitroCd=(r.nitroCd==null?1+Math.random()*3:r.nitroCd)-dt;
