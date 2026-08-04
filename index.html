@@ -571,7 +571,7 @@
     const p0=TRACK[0], fwd=Math.atan2(TRACK[1].y-p0.y,TRACK[1].x-p0.x);
     const fx=Math.cos(fwd),fy=Math.sin(fwd),lx=NRM[0].x,ly=NRM[0].y;
     const place=(back,lat)=>({x:p0.x-fx*back+lx*lat, y:p0.y-fy*back+ly*lat});
-    const pp=place(60,-72); car.x=pp.x; car.y=pp.y; car.vx=0;car.vy=0;car.m=0;car.boostT=0;car.bank=0;car.wheelSteer=0;car.lap=0; car.a=fwd; car.slide=0; car.driftCharge=0; car.driftHold=0; car._wasDrift=false; car.airT=0; car.airZ=0; car._jumped=false; car.steerInput=0; car.hyperT=0; car.pitch=0; car._lastSpd=0; car._bf=0; car._bfCd=0; car._m24flash=0; for(const b of boosts)b.cd=0;
+    const pp=place(60,-72); car.x=pp.x; car.y=pp.y; car.vx=0;car.vy=0;car.m=0;car.boostT=0;car.bank=0;car.wheelSteer=0;car.lap=0; car.a=fwd; car.slide=0; car.driftCharge=0; car.driftHold=0; car._wasDrift=false; car.airT=0; car.airZ=0; car._jumped=false; car.steerInput=0; car.hyperT=0; car.pitch=0; car._lastSpd=0; car._bf=0; car._bfCd=0; car._m24flash=0; car._rank=null; car._passed=null; for(const b of boosts)b.cd=0;
     smoke=[];trail=[];sparks=[];skid=[]; rings=[]; camPunch=0; bestFlash=0; camAng=car.a; car._pRank=0; car._ovCd=0; car.driftChain=0; car.chainT=0; lap=0;best=null;nextCP=0;lapReady=false; score=0;combo=0;comboT=0; car.clean=0;
     cops=[]; heat=0; heatStars=0; escapeT=0; copSpawnCd=0; sirenT=0;   // reset the patrol each race
     rivals=[]; const D=DIFFS[curDiff], grid=[[60,72],[156,-72],[156,72],[252,-72],[252,72]]; finishSeq=0; car.place=null;   // player = front-left; rivals fill the rest
@@ -794,10 +794,13 @@
       }
     }
     if(comboT>0){ comboT-=dt; if(comboT<=0)combo=0; }
-    // ===== OVERTAKE popup — a position gained on the track (not just a bump). _pRank seeds at 0 so the grid start can't fire it.
+    // ===== RANK TICKER — dedicated slot-machine overtake ticker (not shared with raceMsg lane). _pRank seeds at 0 so grid start can't fire it.
     { if((car._ovCd||0)>0)car._ovCd-=dt; const rk=playerRank();
-      if((car._pRank||0)>0 && rk<car._pRank && (car._ovCd||0)<=0){ car._ovCd=1.4; score+=150; raceMsg='▲ OVERTAKE! P'+rk+'  +150'; raceMsgT=1.1;
-        beep(660,0.07,'square',0.2,990); setTimeout(()=>beep(990,0.1,'square',0.2,1320),70); }
+      if((car._pRank||0)>0 && rk<car._pRank && (car._ovCd||0)<=0){ car._ovCd=1.4; score+=150;
+        car._rank={from:car._pRank,to:rk,pts:150,t:1.4,lead:rk===1};
+        beep(660,0.07,'square',0.2,990); setTimeout(()=>beep(990,0.1,'square',0.2,1320),70);
+        if(rk===1) setTimeout(()=>beep(1320,0.14,'square',0.24,1600),160);   // extra sting for TAKING THE LEAD
+      } else if((car._pRank||0)>0 && rk>car._pRank){ car._passed={t:0.7}; noise(0.09,0.08,900,220); }
       car._pRank=rk; }
 
     updateHeat(dt, fx, fy, vR, spd);   // ERASER PATROL pursuit + wreck/escape rewards
@@ -834,6 +837,8 @@
     // HARD PARTICLE CAPS — Chromebook-safe upper bounds no matter how wild the action gets
     if(smoke.length>240)smoke.splice(0,smoke.length-240); if(trail.length>110)trail.splice(0,trail.length-110); if(sparks.length>320)sparks.splice(0,sparks.length-320);
     if(shake>0)shake-=dt*30; if(raceMsgT>0)raceMsgT-=dt; if((car.exitT||0)>0)car.exitT-=dt;
+    if(car._rank && (car._rank.t-=dt)<=0) car._rank=null;
+    if(car._passed && (car._passed.t-=dt)<=0) car._passed=null;
     if(camPunch>0)camPunch=Math.max(0,camPunch-dt*2.2); if(bestFlash>0)bestFlash-=dt; if((car.chainT||0)>0)car.chainT-=dt;
   }
 
@@ -1551,8 +1556,39 @@
     const spd=Math.hypot(car.vx,car.vy);
     drawMinimap(); const momo=1+Math.min(0.40,(car.clean||0)*0.03);
     if(K.brake){ ctx.fillStyle=COL.red; ctx.textAlign='left'; ctx.font='900 16px Trebuchet MS'; ctx.fillText('● BRAKE',24,H-22); }
-    ctx.textAlign='left'; ctx.font='900 32px Trebuchet MS'; ctx.fillStyle=COL.gold; ctx.fillText('P'+playerRank(),24,40);
-    ctx.font='700 13px Trebuchet MS'; ctx.fillStyle='#f4ecd8'; ctx.fillText('/ '+(rivals.length+1),74,40);
+    // ===== P-block with RANK TICKER — slot-machine swap on overtake, red pulse on being passed =====
+    { const rp=car._rank, pk=playerRank();
+      ctx.textAlign='left';
+      if(!rp){
+        let pFill=COL.gold, pGlow=0;
+        if(car._passed){ const k=Math.min(1,car._passed.t/0.7); pGlow=k*14; pFill=COL.red; }
+        ctx.font='900 32px Trebuchet MS';
+        if(pGlow>0){ ctx.shadowColor=pFill; ctx.shadowBlur=pGlow; }
+        ctx.fillStyle=pFill; ctx.fillText('P'+pk,24,40); ctx.shadowBlur=0;
+      } else {
+        const age=1-Math.min(1,rp.t/1.4), slotT=Math.min(1,age*3), alpha=Math.min(1,rp.t*1.6);
+        const rc=rp.lead?COL.cyan:COL.gold;
+        // ring pulse around the P
+        ctx.save(); ctx.globalCompositeOperation='lighter';
+        const ra=Math.max(0,1-age*1.2)*0.55;
+        ctx.strokeStyle=(rp.lead?'rgba(76,224,224,':'rgba(201,168,76,')+ra.toFixed(3)+')'; ctx.lineWidth=2;
+        ctx.beginPath(); ctx.arc(44, 30, 18+age*44, 0, 7); ctx.stroke(); ctx.restore();
+        // old P sliding up + fading
+        ctx.font='900 32px Trebuchet MS'; ctx.globalAlpha=Math.max(0,1-slotT*1.4)*alpha;
+        ctx.fillStyle='rgba(244,236,216,0.75)'; ctx.fillText('P'+rp.from, 24, 40-slotT*32);
+        // new P sliding in from below + scale-pop
+        const scaleNew=1+(1-slotT)*0.5, ny=40+(1-slotT)*32-11;
+        ctx.save(); ctx.translate(44,ny); ctx.scale(scaleNew,scaleNew);
+        ctx.globalAlpha=alpha; ctx.shadowColor=rc; ctx.shadowBlur=20; ctx.fillStyle=rc;
+        ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('P'+rp.to, 0, 0);
+        ctx.shadowBlur=0; ctx.restore();
+        ctx.textAlign='left'; ctx.textBaseline='alphabetic'; ctx.globalAlpha=1;
+        // callout chip to the right
+        ctx.globalAlpha=alpha; ctx.fillStyle=rc; ctx.font='900 13px Trebuchet MS';
+        ctx.fillText((rp.lead?'★ TAKING THE LEAD':'▲ OVERTAKE')+'  +'+rp.pts, 108, 40); ctx.globalAlpha=1;
+      }
+      ctx.font='700 13px Trebuchet MS'; ctx.fillStyle='#f4ecd8'; ctx.fillText('/ '+(rivals.length+1),74,40);
+    }
     ctx.font='900 19px Trebuchet MS'; ctx.fillStyle=COL.cyan; ctx.fillText('◆ '+score.toLocaleString()+' PTS',24,86);
     if(comboT>0&&combo>1){ ctx.font='800 14px Trebuchet MS'; ctx.fillStyle=COL.orange; ctx.fillText('COMBO x'+combo,24,106); }
     if(copsOn){ ctx.font='800 15px Trebuchet MS'; let stars=''; for(let i=0;i<5;i++)stars+=i<heatStars?'★':'☆';
