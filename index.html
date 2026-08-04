@@ -571,7 +571,7 @@
     const p0=TRACK[0], fwd=Math.atan2(TRACK[1].y-p0.y,TRACK[1].x-p0.x);
     const fx=Math.cos(fwd),fy=Math.sin(fwd),lx=NRM[0].x,ly=NRM[0].y;
     const place=(back,lat)=>({x:p0.x-fx*back+lx*lat, y:p0.y-fy*back+ly*lat});
-    const pp=place(60,-72); car.x=pp.x; car.y=pp.y; car.vx=0;car.vy=0;car.m=0;car.boostT=0;car.bank=0;car.wheelSteer=0;car.lap=0; car.a=fwd; car.slide=0; car.driftCharge=0; car.driftHold=0; car._wasDrift=false; car.airT=0; car.airZ=0; car._jumped=false; car.steerInput=0; car.hyperT=0; car.pitch=0; car._lastSpd=0; car._bf=0; car._bfCd=0; for(const b of boosts)b.cd=0;
+    const pp=place(60,-72); car.x=pp.x; car.y=pp.y; car.vx=0;car.vy=0;car.m=0;car.boostT=0;car.bank=0;car.wheelSteer=0;car.lap=0; car.a=fwd; car.slide=0; car.driftCharge=0; car.driftHold=0; car._wasDrift=false; car.airT=0; car.airZ=0; car._jumped=false; car.steerInput=0; car.hyperT=0; car.pitch=0; car._lastSpd=0; car._bf=0; car._bfCd=0; car._m24flash=0; for(const b of boosts)b.cd=0;
     smoke=[];trail=[];sparks=[];skid=[]; rings=[]; camPunch=0; bestFlash=0; camAng=car.a; car._pRank=0; car._ovCd=0; car.driftChain=0; car.chainT=0; lap=0;best=null;nextCP=0;lapReady=false; score=0;combo=0;comboT=0; car.clean=0;
     cops=[]; heat=0; heatStars=0; escapeT=0; copSpawnCd=0; sirenT=0;   // reset the patrol each race
     rivals=[]; const D=DIFFS[curDiff], grid=[[60,72],[156,-72],[156,72],[252,-72],[252,72]]; finishSeq=0; car.place=null;   // player = front-left; rivals fill the rest
@@ -732,7 +732,7 @@
       car.driftCharge=0; }
     car._wasDrift=car.drifting;
 
-    if(K.boost&&car.m>15&&car.boostT<=0){ car.boostT=1.4*UMUL.boost; car.m=Math.max(0,car.m-35); shake=10;
+    if(K.boost&&car.m>15&&car.boostT<=0){ car.boostT=1.4*UMUL.boost; car.m=Math.max(0,car.m-35); shake=10; car._m24flash=1;
       beep(200,0.5,'sawtooth',0.3,900);                                     // core ignition BRAAP (removed the noise up-sweep — that was the whoosh Rob hated)
       beep(64,0.2,'sine',0.3,38);                                           // sub THUMP only (removed the rising air-shimmer that completed the whoosh) — boost still hits with brap + chest thump
       camPunch=Math.max(camPunch,1); ring(car.x,car.y,COL.cyan,700);
@@ -1558,13 +1558,37 @@
     if(copsOn){ ctx.font='800 15px Trebuchet MS'; let stars=''; for(let i=0;i<5;i++)stars+=i<heatStars?'★':'☆';
       const hot=heatStars>=4; ctx.fillStyle=heatStars>0?(hot?'#ff4a4a':COL.orange):'rgba(244,236,216,.45)'; ctx.fillText('🚨 HEAT '+stars,24,128);
       if(cops.some(c=>c.state==='chase')){ ctx.font='800 12px Trebuchet MS'; ctx.fillStyle='#9acd32'; ctx.fillText('ERASER PATROL — juke or wall ’em!',24,146); } }
-    const bw=Math.min(300,W*0.42),bx=(W-bw)/2,by=H-40;
-    ctx.fillStyle='rgba(0,0,0,.45)'; roundRect(bx-4,by-4,bw+8,26,8); ctx.fill();
-    const usable=car.m>=15;
+    // ===== M24.9e METER — signature HUD: tier ticks · READY pulse · burn-flash + shockwave · fire chevrons · drift-chain badge =====
+    const bw=Math.min(300,W*0.42),bx=(W-bw)/2,by=H-40,bh=18;
+    const usable=car.m>=15, full=car.m>=99.5, firing=car.boostT>0||(car.hyperT||0)>0;
+    const _pn=performance.now();
+    ctx.fillStyle='rgba(0,0,0,.5)'; roundRect(bx-6,by-6,bw+12,bh+12,10); ctx.fill();
+    if(full){ const pu=0.5+0.5*Math.sin(_pn*0.012); ctx.save(); ctx.shadowColor=COL.gold; ctx.shadowBlur=20+16*pu; ctx.strokeStyle='rgba(201,168,76,'+(0.7+0.3*pu).toFixed(2)+')'; ctx.lineWidth=2; roundRect(bx-6,by-6,bw+12,bh+12,10); ctx.stroke(); ctx.restore(); }
     if(usable){ ctx.shadowColor=COL.cyan; ctx.shadowBlur=14; }
-    const grad=ctx.createLinearGradient(bx,0,bx+bw,0); grad.addColorStop(0,COL.cyan); grad.addColorStop(1,COL.gold); ctx.fillStyle=grad; if(car.m>0)roundRect(bx,by,Math.max(3,bw*(car.m/100)),18,6),ctx.fill(); ctx.shadowBlur=0;
-    ctx.strokeStyle=usable?COL.gold:'rgba(201,168,76,.6)'; ctx.lineWidth=2; roundRect(bx,by,bw,18,6); ctx.stroke();
-    ctx.fillStyle=usable?COL.gold:'#f4ecd8'; ctx.font='800 12px Trebuchet MS'; ctx.textAlign='center'; ctx.fillText('⚡ M24.9e  '+(usable?'· SHIFT to burn':'· drift to charge'),W/2,by-10);
+    const grad=ctx.createLinearGradient(bx,0,bx+bw,0); grad.addColorStop(0,COL.cyan); grad.addColorStop(0.55,'#8fe0d0'); grad.addColorStop(1,COL.gold);
+    ctx.fillStyle=grad; if(car.m>0){ roundRect(bx,by,Math.max(3,bw*(car.m/100)),bh,6); ctx.fill(); } ctx.shadowBlur=0;
+    if(firing){ ctx.save(); ctx.globalCompositeOperation='lighter'; const nch=6, sw=bw/nch, ph=(_pn*0.0016)%1;
+      for(let i=0;i<nch;i++){ const px=bx+((i+ph)%nch)*sw; const a=0.35*(1-((i+ph)%nch)/nch);
+        ctx.fillStyle='rgba(180,240,255,'+a.toFixed(3)+')'; ctx.beginPath(); ctx.moveTo(px,by); ctx.lineTo(px+sw*0.55,by+bh/2); ctx.lineTo(px,by+bh); ctx.closePath(); ctx.fill(); } ctx.restore(); }
+    ctx.save(); ctx.strokeStyle='rgba(11,7,19,0.65)'; ctx.lineWidth=1.5;
+    for(const t of [15,50,85]){ const tx=bx+bw*(t/100); ctx.beginPath(); ctx.moveTo(tx,by+2); ctx.lineTo(tx,by+bh-2); ctx.stroke(); } ctx.restore();
+    ctx.strokeStyle=full?COL.gold:usable?'rgba(201,168,76,.9)':'rgba(201,168,76,.55)'; ctx.lineWidth=full?2.4:2; roundRect(bx,by,bw,bh,6); ctx.stroke();
+    if((car._m24flash||0)>0){ const f=car._m24flash;
+      ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=f;
+      const wg=ctx.createLinearGradient(bx,0,bx+bw,0); wg.addColorStop(0,'rgba(180,240,255,0.9)'); wg.addColorStop(1,'rgba(255,230,150,0.85)'); ctx.fillStyle=wg; roundRect(bx,by,bw,bh,6); ctx.fill();
+      const rr=12+(1-f)*46; ctx.strokeStyle='rgba(180,240,255,'+(f*0.8).toFixed(2)+')'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(bx,by+bh/2,rr,0,7); ctx.stroke(); ctx.beginPath(); ctx.arc(bx+bw,by+bh/2,rr,0,7); ctx.stroke();
+      ctx.restore(); car._m24flash=Math.max(0,f-0.05); }
+    const label = full ? '⚡ READY!  · SHIFT TO BURN M24.9e' : usable ? '⚡ M24.9e  · SHIFT to burn' : '⚡ M24.9e  · drift to charge';
+    const lblCol = full ? ((Math.floor(_pn/180)%2)?COL.cyan:COL.gold) : usable ? COL.gold : '#f4ecd8';
+    ctx.fillStyle=lblCol; ctx.font=(full?'900 13px':'800 12px')+' Trebuchet MS'; ctx.textAlign='center'; ctx.fillText(label,W/2,by-10);
+    if((car.driftChain||0)>1 && (car.chainT||0)>0){ const chy=by-34, chw=110, chx=W/2-chw/2;
+      ctx.save(); ctx.globalAlpha=Math.min(1,car.chainT*0.9);
+      ctx.fillStyle='rgba(11,7,19,0.75)'; roundRect(chx,chy-14,chw,20,6); ctx.fill();
+      const cf=Math.min(1,car.chainT/4); ctx.fillStyle='rgba(232,132,60,0.35)'; roundRect(chx,chy-14,chw*cf,20,6); ctx.fill();
+      ctx.strokeStyle=COL.orange; ctx.lineWidth=1.5; roundRect(chx,chy-14,chw,20,6); ctx.stroke();
+      ctx.fillStyle=COL.orange; ctx.font='900 12px Trebuchet MS'; ctx.textAlign='center'; ctx.fillText('🔥 CHAIN x'+car.driftChain,W/2,chy);
+      ctx.restore(); }
     // upper-right stack (below the pause/mute buttons): MPH counter + lap + times
     ctx.textAlign='right'; ctx.fillStyle='#f4ecd8'; ctx.font='900 40px Trebuchet MS'; ctx.fillText(Math.min(240,Math.round(Math.abs(spd)/4.2)),W-62,98);   // DISPLAY only: scaled + capped at a realistic 240mph (physics/feel unchanged)
     ctx.font='800 16px Trebuchet MS'; ctx.fillStyle=COL.gold; ctx.fillText('MPH',W-24,98);
