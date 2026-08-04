@@ -450,21 +450,21 @@
   function TH(){ return THEMES[curTheme]||THEMES.hood; }
   const DIFFS={
     // EASY stays the basic wide oval. Everything above it snakes through real S-curves (2*k of them).
-    easy:  {name:'EASY',   roadW:660, laps:4, rSpd:470, rStep:16, rN:3, spd:0.80, rCatch:185, rDrop:130, rFn:t=>1560+300*Math.sin(2*t)+120*Math.cos(t)},
-    medium:{name:'MEDIUM', roadW:600, laps:6, rSpd:670, rStep:28, rN:4, spd:1.00, rCatch:215, rDrop:115, pFn:wavy(1550,1400,420,3,0.3,0.10)},   // long, steep zig-zags · wide
-    hard:  {name:'HARD',   roadW:560, laps:8, rSpd:945, rStep:38, rN:5, spd:1.10, rCatch:305, rDrop:88,  sc:{a:0.30,b:0.47}, pFn:wavy(1560,1420,310,4,0.3,0.10)},   // FASTER, tenacious rivals + zig-zags + shortcut
-    insane:{name:'INSANE', roadW:520, laps:12,rSpd:1085,rStep:42, rN:5, spd:1.18, rCatch:390, rDrop:72,  sc:{a:0.30,b:0.46}, pFn:wavy(1560,1420,230,5,0.3,0.10)},   // brutal rivals — chase hard, barely ease off + shortcut
-    serpent:{name:'THE SERPENT', roadW:480, laps:5, rSpd:730, rStep:28, rN:4, spd:1.04, rCatch:235, rDrop:105, sc:{a:0.31,b:0.46}, pFn:wavy(1580,1440,190,6,0.3,0.10)},   // the ultimate technical run
+    easy:  {name:'EASY',   roadW:660, laps:4, rSpd:390, rStep:16, rN:3, spd:0.80, rCatch:185, rDrop:130, rFn:t=>1560+300*Math.sin(2*t)+120*Math.cos(t)},
+    medium:{name:'MEDIUM', roadW:600, laps:6, rSpd:555, rStep:28, rN:4, spd:1.00, rCatch:215, rDrop:115, pFn:wavy(1550,1400,420,3,0.3,0.10)},   // long, steep zig-zags · wide
+    hard:  {name:'HARD',   roadW:560, laps:8, rSpd:780, rStep:38, rN:5, spd:1.10, rCatch:305, rDrop:88,  sc:{a:0.30,b:0.47}, pFn:wavy(1560,1420,310,4,0.3,0.10)},   // FASTER, tenacious rivals + zig-zags + shortcut
+    insane:{name:'INSANE', roadW:520, laps:12,rSpd:895, rStep:42, rN:5, spd:1.18, rCatch:390, rDrop:72,  sc:{a:0.30,b:0.46}, pFn:wavy(1560,1420,230,5,0.3,0.10)},   // brutal rivals — chase hard, barely ease off + shortcut
+    serpent:{name:'THE SERPENT', roadW:480, laps:5, rSpd:605, rStep:28, rN:4, spd:1.04, rCatch:235, rDrop:105, sc:{a:0.31,b:0.46}, pFn:wavy(1580,1440,190,6,0.3,0.10)},   // the ultimate technical run
     // FIGURE-8 STUNT — the road crosses over itself (bridge overpass) like a freeway interchange, plus a JUMP ramp
-    fig8:{name:'FIGURE-8', roadW:440, laps:4, rSpd:710, rStep:28, rN:4, spd:1.04, rCatch:215, rDrop:112, cross:true, jz:{overCross:true},
+    fig8:{name:'FIGURE-8', roadW:440, laps:4, rSpd:585, rStep:28, rN:4, spd:1.04, rCatch:215, rDrop:112, cross:true, jz:{overCross:true},
       pFn:t=>({ x:1560*Math.cos(t), y:2640*Math.sin(t)*Math.cos(t) })},
     // CROSS-COUNTRY — a long point-to-point rally STAGE (start→finish, checkpoints, no laps) with a BRIDGE OVER WATER + a jump
-    xcountry:{name:'CROSS-COUNTRY', roadW:480, rSpd:850, rStep:28, rN:5, spd:1.16, rCatch:235, rDrop:108, open:true, seg0:0, water:{a:0.235,b:0.285}, jz:{at:0.68,len:5},   // giant serpentine: full semicircle U-turns + straights; water + jump both on STRAIGHTS
+    xcountry:{name:'CROSS-COUNTRY', roadW:480, rSpd:700, rStep:28, rN:5, spd:1.16, rCatch:235, rDrop:108, open:true, seg0:0, water:{a:0.235,b:0.285}, jz:{at:0.68,len:5},   // giant serpentine: full semicircle U-turns + straights; water + jump both on STRAIGHTS
       segs:[{k:0,len:2600},{k:1/1700,len:Math.PI*1700},{k:0,len:2000},{k:-1/1700,len:Math.PI*1700},{k:0,len:2000},{k:1/1700,len:Math.PI*1700},{k:0,len:2000},{k:-1/1700,len:Math.PI*1700},{k:0,len:3800}]},
     // ===== EGYPT — desert circuit past the Sphinx & pyramids, palms + Nile =====
-    egypt:{name:'EGYPT', roadW:560, laps:5, rSpd:720, rStep:26, rN:4, spd:1.05, rCatch:220, rDrop:112, theme:'egypt', pFn:wavy(1580,1440,300,3,0.5,0.12)},
+    egypt:{name:'EGYPT', roadW:560, laps:5, rSpd:595, rStep:26, rN:4, spd:1.05, rCatch:220, rDrop:112, theme:'egypt', pFn:wavy(1580,1440,300,3,0.5,0.12)},
     // ===== SAN FRANCISCO — bay circuit over the Golden Gate, Victorians + fog =====
-    sf:{name:'SAN FRANCISCO', roadW:540, laps:5, rSpd:730, rStep:26, rN:4, spd:1.06, rCatch:225, rDrop:110, theme:'sf', pFn:wavy(1560,1420,340,4,0.2,0.14)},
+    sf:{name:'SAN FRANCISCO', roadW:540, laps:5, rSpd:605, rStep:26, rN:4, spd:1.06, rCatch:225, rDrop:110, theme:'sf', pFn:wavy(1560,1420,340,4,0.2,0.14)},
   };
   function buildTrack(dk){ const D=DIFFS[dk]; curDiff=dk; ROAD_W=D.roadW; OPEN=!!D.open; TOTAL_LAPS=OPEN?1:D.laps; curSpd=D.spd||1; rivalCatch=D.rCatch||160; rivalDrop=D.rDrop||150;
     TRACK.length=0; NRM.length=0; CP.length=0; props.length=0; WATER=null; curTheme=D.theme||'hood'; landmarks.length=0; deco.length=0;
@@ -556,7 +556,7 @@
   function cycleCam(){ camMode=(camMode+1)%2; try{localStorage.setItem('qmCam',camMode);}catch(e){} const nm=['BIRDS-EYE','CLOSE'][camMode]; raceMsg='📷 CAM: '+nm; raceMsgT=1.3; const cb=document.getElementById('camBtn'); if(cb)cb.title='Camera: '+nm+' (C)'; }   // shared by the C key + the 🎥 button (2 modes: far birds-eye / close)
   function ring(x,y,col,sp){ if(rings.length>=22)rings.shift(); rings.push({x,y,r:20,a:0.85,col,sp:sp||520}); }   // BOUNDED (22 max) — cheap stroked-arc shockwave
   const rain=[]; let rainLast=0;   // screen-space rain streaks (wet mode)
-  const MAXSPD=680,BOOST_MAX=980,HEAT_MAX=100,CARSCALE=1.2;   // dampened top speed for more control; CARSCALE bumps sprite size to show UHD detail
+  const MAXSPD=560,BOOST_MAX=800,HEAT_MAX=100,CARSCALE=1.2;   // dampened top speed for more control (~18% cut from 680/980 for slower-reflex friendliness); CARSCALE bumps sprite size to show UHD detail
   // ===== CAR UPGRADES — spend banked passing-points on Handling / Top Speed / Boost (persists across races) =====
   const UPG_MAX=4, UPG_COST=[600,1500,3200,6000];   // cost to buy the next level (1→4)
   let bank=0, UPG={hand:0,top:0,boost:0};
@@ -659,7 +659,7 @@
     const momo=1+Math.min(0.40,(car.clean||0)*0.03);                // CLEAN-DRIVING MOMENTUM: stay off the walls → keep gaining speed
     const targetTop=(car.boostT>0?BOOST_MAX:MAXSPD)*((car.hyperT||0)>0?1.28:1)*sMul.top(PC)*momo*curSpd*UMUL.top;   // *UMUL.top = Top Speed upgrade   // curSpd = difficulty speed-scale; hyperT (from a boost capsule) pushes past even the boost cap
     const launchMul=1+Math.max(0,1-Math.max(0,vF)/360)*0.72;        // punchier off-line kick — standing starts / corner exits pull HARD, no more sluggish crawl
-    const accel=(car.boostT>0?1800:1440)*launchMul*sMul.acc(PC);   // punchier accel — quicker off the line & out of corners (was 1280/1600)
+    const accel=(car.boostT>0?1500:1180)*launchMul*sMul.acc(PC);   // gentler accel curve (~18% down from 1800/1440) so slower reflexes can catch corner exits
     if(K.brake){ vF-=1500*dt; if(vF<-240)vF=-240; } else vF+=accel*dt;
     vF*=0.997; if(vF>targetTop)vF=targetTop; if(vF<-240)vF=-240;   // even LESS drag (0.992→0.996→0.997) → holds top-end on the straights where the INSANE pack pulls away; top speed still clamped by targetTop
 
@@ -1541,7 +1541,7 @@
       ctx.strokeStyle=(night?'rgba(190,225,255,':'rgba(210,225,245,')+d.a+')'; ctx.beginPath(); ctx.moveTo(d.x,d.y); ctx.lineTo(d.x+d.len*WIND,d.y+d.len); ctx.stroke();
     } }
   function drawMinimap(){
-    const S=Math.min(148,W*0.2), x0=W-S-16, y0=182;
+    const S=Math.min(148,W*0.2), x0=W-S-16, y0=202;
     let minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9;
     for(const p of TRACK){ if(p.x<minx)minx=p.x; if(p.x>maxx)maxx=p.x; if(p.y<miny)miny=p.y; if(p.y>maxy)maxy=p.y; }
     const bw=maxx-minx||1, bh=maxy-miny||1, sc=Math.min((S-18)/bw,(S-18)/bh), cx=x0+S/2, cy=y0+S/2, ox=(minx+maxx)/2, oy=(miny+maxy)/2;
@@ -1625,12 +1625,50 @@
       ctx.strokeStyle=COL.orange; ctx.lineWidth=1.5; roundRect(chx,chy-14,chw,20,6); ctx.stroke();
       ctx.fillStyle=COL.orange; ctx.font='900 12px Trebuchet MS'; ctx.textAlign='center'; ctx.fillText('🔥 CHAIN x'+car.driftChain,W/2,chy);
       ctx.restore(); }
-    // upper-right stack (below the pause/mute buttons): MPH counter + lap + times
-    ctx.textAlign='right'; ctx.fillStyle='#f4ecd8'; ctx.font='900 40px Trebuchet MS'; ctx.fillText(Math.min(240,Math.round(Math.abs(spd)/4.2)),W-62,98);   // DISPLAY only: scaled + capped at a realistic 240mph (physics/feel unchanged)
-    ctx.font='800 16px Trebuchet MS'; ctx.fillStyle=COL.gold; ctx.fillText('MPH',W-24,98);
-    ctx.font='800 17px Trebuchet MS'; ctx.fillStyle='#f4ecd8'; ctx.fillText(OPEN?('CP '+Math.min(nextCP,NCP-1)+'/'+(NCP-1)):('LAP '+Math.min(lap+1,TOTAL_LAPS)+'/'+TOTAL_LAPS),W-24,126);
-    if(lapReady){ const t=(performance.now()-lapStart)/1000; ctx.font='700 14px Trebuchet MS'; ctx.fillStyle=COL.gold; ctx.fillText(t.toFixed(2)+'s',W-24,147); }
-    if(best!==null){ ctx.font='700 12px Trebuchet MS'; ctx.fillStyle=COL.cyan; ctx.fillText('BEST '+best.toFixed(2)+'s',W-24,165); }
+    // ===== SPEEDOMETER ARC ===== analog dial (240° span opening at bottom) — color-graded fill, tick marks, cyan-glow on boost
+    { const cx=W-88, cy=82, R=52, startA=5*Math.PI/6, endA=13*Math.PI/6, span=endA-startA;
+      const dispMph=Math.min(240,Math.round(Math.abs(spd)/4.2)), maxMph=250, f=Math.min(1,dispMph/maxMph);
+      const needleA=startA+f*span, boosting=car.boostT>0||(car.hyperT||0)>0, hi=f>0.72;
+      // dark backdrop disc
+      ctx.beginPath(); ctx.arc(cx,cy,R+10,0,Math.PI*2); ctx.fillStyle='rgba(11,7,19,0.55)'; ctx.fill();
+      // full arc (background thin ring)
+      ctx.beginPath(); ctx.arc(cx,cy,R,startA,endA); ctx.strokeStyle='rgba(201,168,76,0.28)'; ctx.lineWidth=3; ctx.stroke();
+      // filled arc up to current speed — color grades cyan→gold→orange→red, cyan on boost
+      const fillCol = boosting?COL.cyan : f>0.85?COL.red : f>0.60?COL.orange : f>0.30?COL.gold : 'rgba(150,220,255,0.85)';
+      ctx.beginPath(); ctx.arc(cx,cy,R,startA,needleA); ctx.strokeStyle=fillCol; ctx.lineWidth=5;
+      if(boosting||hi){ ctx.shadowColor=fillCol; ctx.shadowBlur=12; }
+      ctx.stroke(); ctx.shadowBlur=0;
+      // major ticks every 50 mph (0/50/100/150/200/250)
+      ctx.strokeStyle='rgba(244,236,216,0.6)'; ctx.lineWidth=1.5;
+      for(let m=0;m<=maxMph;m+=50){ const a=startA+(m/maxMph)*span, iR=R-8, oR=R+4;
+        ctx.beginPath(); ctx.moveTo(cx+Math.cos(a)*iR,cy+Math.sin(a)*iR); ctx.lineTo(cx+Math.cos(a)*oR,cy+Math.sin(a)*oR); ctx.stroke(); }
+      // minor ticks every 25 mph
+      ctx.strokeStyle='rgba(244,236,216,0.3)'; ctx.lineWidth=1;
+      for(let m=25;m<maxMph;m+=50){ const a=startA+(m/maxMph)*span, iR=R-4, oR=R+2;
+        ctx.beginPath(); ctx.moveTo(cx+Math.cos(a)*iR,cy+Math.sin(a)*iR); ctx.lineTo(cx+Math.cos(a)*oR,cy+Math.sin(a)*oR); ctx.stroke(); }
+      // needle
+      ctx.strokeStyle=boosting?COL.cyan:COL.gold; ctx.lineWidth=3; ctx.lineCap='round';
+      if(boosting||hi){ ctx.shadowColor=ctx.strokeStyle; ctx.shadowBlur=10; }
+      ctx.beginPath();
+      ctx.moveTo(cx+Math.cos(needleA+Math.PI)*8, cy+Math.sin(needleA+Math.PI)*8);
+      ctx.lineTo(cx+Math.cos(needleA)*(R-6), cy+Math.sin(needleA)*(R-6));
+      ctx.stroke(); ctx.shadowBlur=0; ctx.lineCap='butt';
+      // pivot dot
+      ctx.beginPath(); ctx.arc(cx,cy,5,0,Math.PI*2); ctx.fillStyle=COL.gold; ctx.fill();
+      ctx.beginPath(); ctx.arc(cx,cy,2.5,0,Math.PI*2); ctx.fillStyle=COL.ink; ctx.fill();
+      // digital MPH inside the arc opening
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.font='900 22px Trebuchet MS'; ctx.fillStyle=boosting?COL.cyan:(hi?COL.orange:'#f4ecd8');
+      ctx.fillText(dispMph,cx,cy+18);
+      ctx.font='800 10px Trebuchet MS'; ctx.fillStyle=COL.gold;
+      ctx.fillText('MPH',cx,cy+34);
+      ctx.textBaseline='alphabetic'; ctx.textAlign='left';
+    }
+    // upper-right stack (LAP/CP + times) — shifted down to clear the speedometer
+    ctx.textAlign='right';
+    ctx.font='800 17px Trebuchet MS'; ctx.fillStyle='#f4ecd8'; ctx.fillText(OPEN?('CP '+Math.min(nextCP,NCP-1)+'/'+(NCP-1)):('LAP '+Math.min(lap+1,TOTAL_LAPS)+'/'+TOTAL_LAPS),W-24,150);
+    if(lapReady){ const t=(performance.now()-lapStart)/1000; ctx.font='700 14px Trebuchet MS'; ctx.fillStyle=COL.gold; ctx.fillText(t.toFixed(2)+'s',W-24,168); }
+    if(best!==null){ ctx.font='700 12px Trebuchet MS'; ctx.fillStyle=COL.cyan; ctx.fillText('BEST '+best.toFixed(2)+'s',W-24,184); }
     ctx.textAlign='left'; ctx.font='800 13px Trebuchet MS'; ctx.fillStyle=night?COL.cyan:COL.gold; ctx.fillText((night?'◐ NIGHT (2× M24.9e) [N]':'☀ DAY [N]')+(wet?'  ·  💧 WET [W]':'  ·  DRY [W]'),24,62);
     if(momo>1.03){ ctx.font='800 14px Trebuchet MS'; ctx.fillStyle=momo>1.30?COL.orange:COL.cyan; ctx.fillText('⚡ MOMENTUM x'+momo.toFixed(2),24,H-52); }
     ctx.font='700 12px Trebuchet MS'; ctx.fillStyle=assist?COL.cyan:'rgba(244,236,216,.4)'; ctx.fillText(assist?'➤ TURN GUIDE ON [T]':'TURN GUIDE OFF [T]',24,H-30);
