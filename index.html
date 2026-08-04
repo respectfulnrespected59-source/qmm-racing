@@ -1670,6 +1670,28 @@
     if(lapReady){ const t=(performance.now()-lapStart)/1000; ctx.font='700 14px Trebuchet MS'; ctx.fillStyle=COL.gold; ctx.fillText(t.toFixed(2)+'s',W-24,168); }
     if(best!==null){ ctx.font='700 12px Trebuchet MS'; ctx.fillStyle=COL.cyan; ctx.fillText('BEST '+best.toFixed(2)+'s',W-24,184); }
     ctx.textAlign='left'; ctx.font='800 13px Trebuchet MS'; ctx.fillStyle=night?COL.cyan:COL.gold; ctx.fillText((night?'◐ NIGHT (2× M24.9e) [N]':'☀ DAY [N]')+(wet?'  ·  💧 WET [W]':'  ·  DRY [W]'),24,62);
+    // ===== LEADERBOARD ===== ranked list of every racer — turns "P?/N" into a readable race narrative
+    if(phase==='racing' || phase==='countdown'){
+      const board=[{name:'YOU', isPlayer:true, prog:car.lap*TN+nearestTrack(car.x,car.y).idx, color:COL.gold}];
+      for(const r of rivals) board.push({ name:r.name, isPlayer:false, prog:r.lap*TN+r.idx, color:(r.col&&r.col.s)||'#f4ecd8' });
+      board.sort((a,b) => b.prog - a.prog);
+      const lx=24, ly0=176, rowH=19, boardH=board.length*rowH+10;
+      ctx.save();
+      ctx.fillStyle='rgba(11,7,19,0.55)'; roundRect(lx-6,ly0-14,180,boardH,8); ctx.fill();
+      ctx.strokeStyle='rgba(201,168,76,0.28)'; ctx.lineWidth=1.2; roundRect(lx-6,ly0-14,180,boardH,8); ctx.stroke();
+      ctx.textAlign='left';
+      board.forEach((c,i) => {
+        const y=ly0+i*rowH;
+        if(c.isPlayer){ ctx.fillStyle='rgba(201,168,76,0.16)'; roundRect(lx-4,y-12,176,rowH-2,4); ctx.fill(); }
+        ctx.font=c.isPlayer?'900 13px Trebuchet MS':'800 13px Trebuchet MS';
+        ctx.fillStyle=c.isPlayer?COL.gold:'#f4ecd8'; ctx.fillText('P'+(i+1), lx, y);
+        ctx.fillStyle=c.color; ctx.beginPath(); ctx.arc(lx+30, y-4, 4, 0, Math.PI*2); ctx.fill();
+        ctx.font=c.isPlayer?'900 12px Trebuchet MS':'700 12px Trebuchet MS';
+        ctx.fillStyle=c.isPlayer?COL.gold:'#f4ecd8'; ctx.fillText(c.name.slice(0,10), lx+42, y);
+        if(c.isPlayer){ ctx.fillStyle=COL.cyan; ctx.font='900 11px Trebuchet MS'; ctx.fillText('◄', lx+152, y); }
+      });
+      ctx.restore();
+    }
     if(momo>1.03){ ctx.font='800 14px Trebuchet MS'; ctx.fillStyle=momo>1.30?COL.orange:COL.cyan; ctx.fillText('⚡ MOMENTUM x'+momo.toFixed(2),24,H-52); }
     ctx.font='700 12px Trebuchet MS'; ctx.fillStyle=assist?COL.cyan:'rgba(244,236,216,.4)'; ctx.fillText(assist?'➤ TURN GUIDE ON [T]':'TURN GUIDE OFF [T]',24,H-30);
     ctx.fillStyle=photo?'rgba(76,224,224,.7)':'rgba(244,236,216,.4)'; ctx.fillText(photo?'📷 PS3 PHOTO [L]':lite?'⚡ LITE [L]':'✨ PS3 HD [L]',180,H-30);
