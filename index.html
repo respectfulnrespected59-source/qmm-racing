@@ -1601,8 +1601,48 @@
     ctx.fillStyle=photo?'rgba(76,224,224,.7)':'rgba(244,236,216,.4)'; ctx.fillText(photo?'📷 PS3 PHOTO [L]':lite?'⚡ LITE [L]':'✨ PS3 HD [L]',180,H-30);
     if(nowPlaying){ ctx.textAlign='center'; ctx.font='700 12px Trebuchet MS'; ctx.fillStyle='rgba(201,168,76,.72)'; ctx.fillText('♪ '+nowPlaying+'   ·   [J] skip',W/2,22); }
     // countdown / GO
-    if(phase==='countdown'){ const n=Math.max(1,Math.ceil(cdT)); ctx.textAlign='center'; ctx.font='900 130px Trebuchet MS'; ctx.fillStyle=COL.gold; ctx.shadowColor=COL.gold; ctx.shadowBlur=30; ctx.fillText(n,W/2,H*0.47); ctx.shadowBlur=0; ctx.font='800 20px Trebuchet MS'; ctx.fillStyle='#f4ecd8'; ctx.fillText('GET READY',W/2,H*0.47+58); }
-    else if(goFlash>0){ ctx.textAlign='center'; ctx.globalAlpha=Math.min(1,goFlash*1.6); ctx.font='900 130px Trebuchet MS'; ctx.fillStyle=COL.cyan; ctx.shadowColor=COL.cyan; ctx.shadowBlur=34; ctx.fillText('GO!',W/2,H*0.47); ctx.shadowBlur=0; ctx.globalAlpha=1; }
+    // ===== COUNTDOWN WIND-UP ===== scale-pop on each tick, chromatic cyan-under-gold, expanding rings, vignette pulse
+    if(phase==='countdown'){
+      const n=Math.max(1,Math.ceil(cdT));
+      const frac=cdT-Math.floor(cdT); const age=1-(frac>0?frac:1);        // 0 = digit just ticked, 1 = about to switch
+      const pop=1 + Math.max(0, 1 - age*6)*0.6;                            // 1.6x for ~167ms, then settle to 1.0
+      const cx=W/2, cy=H*0.47;
+      // expanding rings behind the digit — spawn fresh on each tick
+      ctx.save(); ctx.globalCompositeOperation='lighter';
+      const ra1=Math.max(0,(1-age)*0.55); ctx.strokeStyle='rgba(201,168,76,'+ra1.toFixed(3)+')'; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(cx,cy-12,32+age*260,0,7); ctx.stroke();
+      const ra2=Math.max(0,(1-age)*0.35); ctx.strokeStyle='rgba(76,224,224,'+ra2.toFixed(3)+')'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy-12,18+age*180,0,7); ctx.stroke();
+      ctx.restore();
+      // vignette pulse — corners darken briefly on the tick
+      if(!lite){ const vp=Math.max(0,1-age*4)*0.32; if(vp>0.02){ const vg=ctx.createRadialGradient(cx,cy,0,cx,cy,Math.max(W,H)*0.6); vg.addColorStop(0.4,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,'+vp.toFixed(2)+')'); ctx.fillStyle=vg; ctx.fillRect(0,0,W,H); } }
+      // digit — chromatic cyan ghost behind, gold on top, scaled pop
+      ctx.save(); ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.translate(cx,cy); ctx.scale(pop,pop);
+      ctx.globalAlpha=0.55; ctx.fillStyle=COL.cyan; ctx.shadowColor=COL.cyan; ctx.shadowBlur=24; ctx.font='900 140px Trebuchet MS'; ctx.fillText(n,-5,0);
+      ctx.globalAlpha=1; ctx.fillStyle=COL.gold; ctx.shadowColor=COL.gold; ctx.shadowBlur=30; ctx.fillText(n,0,0);
+      ctx.shadowBlur=0; ctx.restore(); ctx.textBaseline='alphabetic';
+      // pulsing GET READY beneath
+      ctx.textAlign='center'; ctx.font='800 20px Trebuchet MS';
+      ctx.fillStyle='rgba(244,236,216,'+(0.55+0.45*Math.sin(performance.now()*0.008)).toFixed(2)+')';
+      ctx.fillText('GET READY',cx,cy+68);
+    }
+    // ===== GO! ===== expanding scale, twin shockwaves, brief cyan screen wash
+    else if(goFlash>0){
+      const t=Math.max(0,0.9-goFlash);                       // 0 → 0.9 (time since GO)
+      const scale=1+t*0.7;                                    // 1.0 → 1.63
+      const alpha=Math.min(1,goFlash*1.6);
+      const cx=W/2, cy=H*0.47;
+      ctx.save(); ctx.globalCompositeOperation='lighter';
+      for(let s=0;s<2;s++){ const st=t+s*0.12; if(st<0||st>0.9)continue;
+        const ra=Math.max(0,(0.9-st)/0.9)*0.5; ctx.strokeStyle='rgba(76,224,224,'+ra.toFixed(3)+')'; ctx.lineWidth=3+2*ra;
+        ctx.beginPath(); ctx.arc(cx,cy-4,40+st*380,0,7); ctx.stroke(); }
+      if(goFlash>0.75){ const wa=(goFlash-0.75)/0.15*0.2; ctx.fillStyle='rgba(140,240,255,'+wa.toFixed(3)+')'; ctx.fillRect(0,0,W,H); }
+      ctx.restore();
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.save(); ctx.translate(cx,cy); ctx.scale(scale,scale);
+      ctx.globalAlpha=alpha*0.5; ctx.fillStyle=COL.gold; ctx.shadowColor=COL.gold; ctx.shadowBlur=30; ctx.font='900 150px Trebuchet MS'; ctx.fillText('GO!',3,3);
+      ctx.globalAlpha=alpha; ctx.fillStyle=COL.cyan; ctx.shadowColor=COL.cyan; ctx.shadowBlur=38; ctx.fillText('GO!',0,0);
+      ctx.shadowBlur=0; ctx.restore(); ctx.textBaseline='alphabetic'; ctx.globalAlpha=1;
+    }
     if(raceMsgT>0){ ctx.textAlign='center'; ctx.globalAlpha=Math.min(1,raceMsgT); ctx.font='900 46px Trebuchet MS'; ctx.fillStyle=COL.gold; ctx.shadowColor=COL.gold; ctx.shadowBlur=18; ctx.fillText(raceMsg,W/2,H*0.2); ctx.shadowBlur=0; ctx.globalAlpha=1; }
   }
 
