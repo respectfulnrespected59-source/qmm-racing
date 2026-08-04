@@ -346,7 +346,7 @@
     }).catch(()=>{}); }
   function engineUpdate(spd,boost){ if(!AUD.ctx||!engReady)return; const t=AUD.ctx.currentTime;
     // GEARBOX: revs climb within a gear, then drop on each up-shift (with a clutch "chk")
-    const ref=BOOST_MAX, GEARS=5;
+    const ref=MAXSPD*1.05, GEARS=5;   // decouple engine revs from BOOST_MAX — cruising now hits ~gear 4 near peak, boost/hyper pins the needle. Fixes audio drag caused by speed nerf.
     const gf=Math.min(GEARS-0.001,(Math.max(0,spd)/ref)*GEARS), gear=Math.floor(gf), frac=gf-gear;
     const rpm=74 + frac*198;                                        // DEEPER register (lower idle + top) → a bigger, lower, meaner growl
     engA.frequency.setTargetAtTime(rpm,t,0.015); engB.frequency.setTargetAtTime(rpm,t,0.015); engC.frequency.setTargetAtTime(rpm,t,0.015); engSub.frequency.setTargetAtTime(rpm*0.5,t,0.015);
@@ -450,21 +450,21 @@
   function TH(){ return THEMES[curTheme]||THEMES.hood; }
   const DIFFS={
     // EASY stays the basic wide oval. Everything above it snakes through real S-curves (2*k of them).
-    easy:  {name:'EASY',   roadW:660, laps:4, rSpd:390, rStep:16, rN:3, spd:0.80, rCatch:185, rDrop:130, rFn:t=>1560+300*Math.sin(2*t)+120*Math.cos(t)},
-    medium:{name:'MEDIUM', roadW:600, laps:6, rSpd:555, rStep:28, rN:4, spd:1.00, rCatch:215, rDrop:115, pFn:wavy(1550,1400,420,3,0.3,0.10)},   // long, steep zig-zags · wide
-    hard:  {name:'HARD',   roadW:560, laps:8, rSpd:780, rStep:38, rN:5, spd:1.10, rCatch:305, rDrop:88,  sc:{a:0.30,b:0.47}, pFn:wavy(1560,1420,310,4,0.3,0.10)},   // FASTER, tenacious rivals + zig-zags + shortcut
-    insane:{name:'INSANE', roadW:520, laps:12,rSpd:895, rStep:42, rN:5, spd:1.18, rCatch:390, rDrop:72,  sc:{a:0.30,b:0.46}, pFn:wavy(1560,1420,230,5,0.3,0.10)},   // brutal rivals — chase hard, barely ease off + shortcut
-    serpent:{name:'THE SERPENT', roadW:480, laps:5, rSpd:605, rStep:28, rN:4, spd:1.04, rCatch:235, rDrop:105, sc:{a:0.31,b:0.46}, pFn:wavy(1580,1440,190,6,0.3,0.10)},   // the ultimate technical run
+    easy:  {name:'EASY',   roadW:660, laps:4, rSpd:430, rStep:16, rN:3, spd:0.80, rCatch:185, rDrop:130, rFn:t=>1560+300*Math.sin(2*t)+120*Math.cos(t)},
+    medium:{name:'MEDIUM', roadW:600, laps:6, rSpd:610, rStep:28, rN:4, spd:1.00, rCatch:215, rDrop:115, pFn:wavy(1550,1400,420,3,0.3,0.10)},   // long, steep zig-zags · wide
+    hard:  {name:'HARD',   roadW:560, laps:8, rSpd:860, rStep:38, rN:5, spd:1.10, rCatch:305, rDrop:88,  sc:{a:0.30,b:0.47}, pFn:wavy(1560,1420,310,4,0.3,0.10)},   // FASTER, tenacious rivals + zig-zags + shortcut
+    insane:{name:'INSANE', roadW:520, laps:12,rSpd:990, rStep:42, rN:5, spd:1.18, rCatch:390, rDrop:72,  sc:{a:0.30,b:0.46}, pFn:wavy(1560,1420,230,5,0.3,0.10)},   // brutal rivals — chase hard, barely ease off + shortcut
+    serpent:{name:'THE SERPENT', roadW:480, laps:5, rSpd:665, rStep:28, rN:4, spd:1.04, rCatch:235, rDrop:105, sc:{a:0.31,b:0.46}, pFn:wavy(1580,1440,190,6,0.3,0.10)},   // the ultimate technical run
     // FIGURE-8 STUNT — the road crosses over itself (bridge overpass) like a freeway interchange, plus a JUMP ramp
-    fig8:{name:'FIGURE-8', roadW:440, laps:4, rSpd:585, rStep:28, rN:4, spd:1.04, rCatch:215, rDrop:112, cross:true, jz:{overCross:true},
+    fig8:{name:'FIGURE-8', roadW:440, laps:4, rSpd:640, rStep:28, rN:4, spd:1.04, rCatch:215, rDrop:112, cross:true, jz:{overCross:true},
       pFn:t=>({ x:1560*Math.cos(t), y:2640*Math.sin(t)*Math.cos(t) })},
     // CROSS-COUNTRY — a long point-to-point rally STAGE (start→finish, checkpoints, no laps) with a BRIDGE OVER WATER + a jump
-    xcountry:{name:'CROSS-COUNTRY', roadW:480, rSpd:700, rStep:28, rN:5, spd:1.16, rCatch:235, rDrop:108, open:true, seg0:0, water:{a:0.235,b:0.285}, jz:{at:0.68,len:5},   // giant serpentine: full semicircle U-turns + straights; water + jump both on STRAIGHTS
+    xcountry:{name:'CROSS-COUNTRY', roadW:480, rSpd:770, rStep:28, rN:5, spd:1.16, rCatch:235, rDrop:108, open:true, seg0:0, water:{a:0.235,b:0.285}, jz:{at:0.68,len:5},   // giant serpentine: full semicircle U-turns + straights; water + jump both on STRAIGHTS
       segs:[{k:0,len:2600},{k:1/1700,len:Math.PI*1700},{k:0,len:2000},{k:-1/1700,len:Math.PI*1700},{k:0,len:2000},{k:1/1700,len:Math.PI*1700},{k:0,len:2000},{k:-1/1700,len:Math.PI*1700},{k:0,len:3800}]},
     // ===== EGYPT — desert circuit past the Sphinx & pyramids, palms + Nile =====
-    egypt:{name:'EGYPT', roadW:560, laps:5, rSpd:595, rStep:26, rN:4, spd:1.05, rCatch:220, rDrop:112, theme:'egypt', pFn:wavy(1580,1440,300,3,0.5,0.12)},
+    egypt:{name:'EGYPT', roadW:560, laps:5, rSpd:655, rStep:26, rN:4, spd:1.05, rCatch:220, rDrop:112, theme:'egypt', pFn:wavy(1580,1440,300,3,0.5,0.12)},
     // ===== SAN FRANCISCO — bay circuit over the Golden Gate, Victorians + fog =====
-    sf:{name:'SAN FRANCISCO', roadW:540, laps:5, rSpd:605, rStep:26, rN:4, spd:1.06, rCatch:225, rDrop:110, theme:'sf', pFn:wavy(1560,1420,340,4,0.2,0.14)},
+    sf:{name:'SAN FRANCISCO', roadW:540, laps:5, rSpd:665, rStep:26, rN:4, spd:1.06, rCatch:225, rDrop:110, theme:'sf', pFn:wavy(1560,1420,340,4,0.2,0.14)},
   };
   function buildTrack(dk){ const D=DIFFS[dk]; curDiff=dk; ROAD_W=D.roadW; OPEN=!!D.open; TOTAL_LAPS=OPEN?1:D.laps; curSpd=D.spd||1; rivalCatch=D.rCatch||160; rivalDrop=D.rDrop||150;
     TRACK.length=0; NRM.length=0; CP.length=0; props.length=0; WATER=null; curTheme=D.theme||'hood'; landmarks.length=0; deco.length=0;
@@ -576,7 +576,7 @@
     cops=[]; heat=0; heatStars=0; escapeT=0; copSpawnCd=0; sirenT=0;   // reset the patrol each race
     rivals=[]; const D=DIFFS[curDiff], grid=[[60,72],[156,-72],[156,72],[252,-72],[252,72]]; finishSeq=0; car.place=null;   // player = front-left; rivals fill the rest
     const pool=CARS.map((_,i)=>i).filter(i=>i!==playerCar);   // rivals drive every car EXCEPT the player's pick
-    for(let k=0;k<D.rN;k++){ const g=place(grid[k][0],grid[k][1]); const ci=pool[k%pool.length]; rivals.push({x:g.x,y:g.y,a:fwd,idx:2,lap:0,speed:D.rSpd+k*D.rStep,carIdx:ci,name:CARS[ci].driver,col:{b:'#1a1a22',s:CARS[ci].color},finished:false,place:null,bumpCd:0,aggr:0.7+Math.random()*0.75}); }   // aggr = how hard this driver fights for position
+    for(let k=0;k<D.rN;k++){ const g=place(grid[k][0],grid[k][1]); const ci=pool[k%pool.length]; rivals.push({x:g.x,y:g.y,a:fwd,idx:2,lap:0,speed:D.rSpd+k*D.rStep,carIdx:ci,name:CARS[ci].driver,col:{b:'#1a1a22',s:CARS[ci].color},finished:false,place:null,bumpCd:0,aggr:0.95+Math.random()*0.55}); }   // aggr = how hard this driver fights for position (raised min from 0.7 → 0.95 so no weak-willed drivers)
     phase='countdown'; cdT=3.0; goFlash=0; lastCd=99; raceMsg=''; raceMsgT=0;
   }
 
@@ -855,7 +855,7 @@
     const apexI=TI(nr+LA); let tgx=TRACK[apexI].x, tgy=TRACK[apexI].y;
     { const mA=TRACK[TI(nr+Math.round(LA*0.4))], mC=TRACK[TI(nr+LA+Math.round(LA*0.6))];   // concavity vector points to the INSIDE of the curve (≈0 on straights → robust, no sign guessing)
       let ivx=(mA.x+mC.x)/2-tgx, ivy=(mA.y+mC.y)/2-tgy; const il=Math.hypot(ivx,ivy)||1;
-      const apex=Math.min(ROAD_W*0.32, il*1.5); tgx+=ivx/il*apex; tgy+=ivy/il*apex; }   // clamp to keep them on-track (the road-ring clamp below is the final safety net)
+      const apex=Math.min(ROAD_W*0.36, il*1.65); tgx+=ivx/il*apex; tgy+=ivy/il*apex; }   // tighter apex commit (0.32→0.36 / 1.5→1.65) — rivals cut cleaner lines through corners
     let desired=Math.atan2(tgy-r.y,tgx-r.x);
     // AGGRESSION with RACING SENSE — only fight a car you're genuinely wheel-to-wheel with for position:
     // close by AND on similar race progress (not a lap up/down, not way ahead/behind). Then lean on them
@@ -874,13 +874,13 @@
       const ahead=ox*Math.cos(r.a)+oy*Math.sin(r.a); if(ahead>0&&ahead<220&&od<240)drafting=true; }   // a car right in front = slipstream
     { const ox=car.x-r.x,oy=car.y-r.y,od=Math.hypot(ox,oy)||1; if(od<115){ sepx-=ox/od*(115-od); sepy-=oy/od*(115-od); } }   // ease off the PLAYER too — race clean, don't just wall them off
     if(sepx||sepy){ let sa=Math.atan2(sepy,sepx),dsep=sa-desired; while(dsep>Math.PI)dsep-=2*Math.PI; while(dsep<-Math.PI)dsep+=2*Math.PI; desired+=Math.max(-0.45,Math.min(0.45,dsep))*0.55; }
-    let da=desired-r.a; while(da>Math.PI)da-=2*Math.PI; while(da<-Math.PI)da+=2*Math.PI; const turn=4.4*dt; r.a+=Math.max(-turn,Math.min(turn,da));
+    let da=desired-r.a; while(da>Math.PI)da-=2*Math.PI; while(da<-Math.PI)da+=2*Math.PI; const turn=5.0*dt; r.a+=Math.max(-turn,Math.min(turn,da));   // faster turn response (4.4→5.0) — rivals catch lines quicker, especially on tight technical stages
     const pProg=car.lap*TN+nearestTrack(car.x,car.y).idx, rProg=r.lap*TN+nr; let spd=r.speed+(pProg-rProg)*0.42; spd=Math.max(r.speed-rivalDrop,Math.min(r.speed+rivalCatch,spd));   // harder diffs: chase harder, ease off less when leading
     // NITRO PUSH — rivals burn their OWN boost on the straights so they actually RACE you (pull away → force a chase) instead of cruising
     r.nitroCd=(r.nitroCd==null?1+Math.random()*3:r.nitroCd)-dt;
     const sd0=Math.atan2(TRACK[TI(nr+2)].y-TRACK[nr].y,TRACK[TI(nr+2)].x-TRACK[nr].x), sd1=Math.atan2(TRACK[TI(nr+LA+2)].y-TRACK[TI(nr+LA)].y,TRACK[TI(nr+LA+2)].x-TRACK[TI(nr+LA)].x);
     let cc=sd1-sd0; while(cc>Math.PI)cc-=2*Math.PI; while(cc<-Math.PI)cc+=2*Math.PI;
-    if(r.nitroCd<=0 && Math.abs(cc)<0.22 && (r.surge||0)<=0){ r.surge=0.7+Math.random()*0.5; r.nitroCd=3+Math.random()*4; }   // fire a self-nitro on a straight, then cool down 3–7s
+    if(r.nitroCd<=0 && Math.abs(cc)<0.22 && (r.surge||0)<=0){ r.surge=0.9+Math.random()*0.6; r.nitroCd=2+Math.random()*3; }   // fire self-nitro more often + longer (was 3–7s cd / 0.7–1.2s burst; now 2–5s cd / 0.9–1.5s burst) — real racing pressure
     if((r.surge||0)>0){ r.surge-=dt; spd+=220; }   // capsule OR self-nitro surge
     if(drafting) spd+=90;   // slipstream tow → intra-pack overtakes (positions trade, not a static train)
     r.vx=Math.cos(r.a)*spd; r.vy=Math.sin(r.a)*spd;                                   // rail velocity — read by the bump math
@@ -1297,7 +1297,7 @@
     // ── CAMERA MODES (cycle with C): 0=CLASSIC far/birds-eye top-down · 1=CLOSE mid top-down. (DRONE scrapped — forced world-rotation chase felt wrong.) ──
     ctx.save();
     { // fixed north-up camera (never rotates the world — no dizziness). CLASSIC=0.7 (far) · CLOSE=1.0 (mid, default).
-      const zm=(camMode===0?0.7:1.0)*(1-vFeel*0.05)*(1+camPunch*camPunch*0.05);
+      const zm=(camMode===0?0.7:1.0)*(1-vFeel*0.05);   // camPunch zoom-pump REMOVED — was reading as a camera shake / jerk on boost + drift-release. Camera stays rock-steady.
       const _lead=vFeel*105, _lx=car.x+(car.vx/_lv)*_lead, _ly=car.y+(car.vy/_lv)*_lead;   // forward lead so you still see what's coming at the tighter zoom
       ctx.translate(W/2+sx,H/2+sy); ctx.scale(zm,zm); ctx.translate(-_lx,-_ly);
     }
