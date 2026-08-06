@@ -2462,10 +2462,14 @@
     const _spd=Math.hypot(car.vx,car.vy), vFeel=Math.max(0,Math.min(1,(_spd-280)/700));   // 0 at cruise (~66mph), ramps to 1 near the boost cap
     const sx=0, sy=0;   // camera shake + speed-rumble REMOVED — the camera stays rock-steady
     const _lv=_spd||1;
-    // ── CAMERA MODES (cycle with C): 0=CLASSIC far/birds-eye top-down · 1=CLOSE mid top-down. (DRONE scrapped — forced world-rotation chase felt wrong.) ──
+    // ── CAMERA MODES (cycle with C): 0=CHASE (pseudo-3D, handled by draw3D) · 1=BIRDS-EYE far top-down · 2=CLOSE mid. ──
     ctx.save();
-    { // fixed north-up camera (never rotates the world — no dizziness). CLASSIC=0.7 (far) · CLOSE=1.0 (mid, default).
-      const zm=(camMode===0?0.7:1.0)*(1-vFeel*0.05);   // camPunch zoom-pump REMOVED — was reading as a camera shake / jerk on boost + drift-release. Camera stays rock-steady.
+    { // Fixed north-up camera (never rotates the world — no dizziness).
+      // OFF-BY-ONE FIX: this tested camMode===0 for the far zoom, but mode 0 is CHASE and returns early to draw3D()
+      // long before this line — so it never matched, and BIRDS-EYE was silently rendering at CLOSE's 1.0 zoom. The
+      // mode numbers shifted when the chase camera was inserted at 0 and this was not renumbered with them.
+      // Birds-eye is also pulled back further than its old 0.7 — the higher vantage reads better over the 3D city.
+      const zm=(camMode===1?0.62:1.0)*(1-vFeel*0.05);   // camPunch zoom-pump REMOVED — was reading as a camera shake / jerk on boost + drift-release. Camera stays rock-steady.
       const _lead=vFeel*105, _lx=car.x+(car.vx/_lv)*_lead, _ly=car.y+(car.vy/_lv)*_lead;   // forward lead so you still see what's coming at the tighter zoom
       ctx.translate(W/2+sx,H/2+sy); ctx.scale(zm,zm); ctx.translate(-_lx,-_ly);
       CAMX=_lx; CAMY=_ly;
