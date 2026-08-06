@@ -787,10 +787,41 @@
     // unchanged and countersteer still catches the car (helped by the -steer*720/s removal and the maxSlide clamp).
     // Both branches are now dt-corrected via pow(retain, dt*60); they match the old values exactly at 60fps and no
     // longer decay twice as fast at 120fps, which the bare per-frame multiply did.
-    if(car.drifting) grip=(Math.abs(car.steerInput||0)<0.25 && spd>70) ? Math.pow(0.997,dt*60) : Math.pow(0.968,dt*60);
+    // v2: the first cut gated the sustain on a NEAR-NEUTRAL wheel, which was the wrong axis — through a corner you
+    // are steering, so it sat on the fast-decay branch for the whole turn and only sustained on exit. The real split
+    // is INTO-THE-SLIDE vs COUNTERSTEER. Tail steer pushes vR by (-steer), so steer and vR sharing a sign means the
+    // driver is fighting the slide; opposite signs (or neutral) means holding it.
+    //   holding it  → near-lossless retain, so the skate lasts exactly as long as SPACE is held (maxSlide caps it)
+    //   countersteer→ old 0.968 retain PLUS the active -steer*720/s removal, so the catch stays crisp
+    // Below the 70 speed floor it always falls back to 0.968 and regrips naturally.
+    let _holding=false;
+    if(car.drifting){
+      // INTO-THE-SLIDE vs COUNTERSTEER. Tail steer pushes vR by (-steer), so steer and vR sharing a sign means the
+      // driver is FIGHTING the slide; opposite signs, or a neutral wheel, means holding it. Retain itself stays at
+      // the original 0.968 (now dt-corrected) — a near-lossless retain pinned vR to maxSlide, which crabbed the car
+      // sideways and cost ~2s a lap. The sustain is done below by holding an ANGLE, not by refusing to decay.
+      _holding=!(((car.steerInput||0)*vR)>0 && Math.abs(car.steerInput||0)>0.25) && spd>70;
+      // Neutral wheel (corner exit) gets the slow retain so the skate survives straightening out. Steering gets the
+      // ORIGINAL 0.968 — the angle is regulated explicitly below instead, which keeps the cornering slide exactly as
+      // deep as it always was. Letting the retain do the work there pinned vR to maxSlide and cost ~2s a lap.
+      grip=(_holding && Math.abs(car.steerInput||0)<=0.15) ? Math.pow(0.997,dt*60) : Math.pow(0.968,dt*60); }
     else if((car.exitT||0)>0){ const k=Math.min(1,car.exitT/0.6); grip=grip+(0.96-grip)*k*0.72; }   // DRIFT EXIT: traction eases loose→full over a SHORT window → regrips quick and shoots out, no lingering slide
     else grip=Math.max(0.55, grip-0.12*hiK);   // HIGH-SPEED TRACTION: the rear bites progressively harder the faster you go → the car HOLDS its chosen line at top speed instead of washing wide (top speed untouched)
     const lateralScrub=vR*(1-grip); vR*=grip;
+    // HOLD-SUSTAIN. The slide used to bleed to zero the moment you stopped feeding it with steering, so the skate
+    // died mid-corner with SPACE still held — that was the actual "can't hold it as long as I want" complaint.
+    // A held drift now settles to a stable HOLD ANGLE and stays there indefinitely: it neither dies nor pins to
+    // maxSlide. Steering into the slide still pushes it deeper via tail steer; countersteer or releasing SPACE
+    // recovers it. Keeping the angle moderate is what protects lap time — a maxed-out slide crabs the car sideways
+    // and makes less progress down the road.
+    // Only while actually steering into the slide. The previous attempt sustained at a neutral wheel too, which
+    // PUMPED a near-zero slide up to the hold angle on straights — the car crabbed everywhere and lap time went to
+    // 12.4s. The target is the equilibrium the original feed-vs-decay balance settled at (min(spd*0.885, 375)), so
+    // a held corner slide is exactly as deep as it always was — it simply no longer collapses when you ease off the
+    // lock. `a>20` means an established slide is held, never created.
+    if(car.drifting && _holding && Math.abs(car.steerInput||0)>0.15){
+      const tgt=Math.min(Math.abs(vF)*0.95+165, 375, spd*0.885), a=Math.abs(vR);
+      if(a>20) vR+=Math.sign(vR)*(tgt-a)*Math.min(1,dt*3); }
     if(vF>0){ vF=Math.min(targetTop, vF+Math.abs(lateralScrub)*0.8); }   // carry the slide's scrubbed energy FORWARD (during the drift TOO) so a drift propels you out — not a speed-bleeding drag
     car.vx=fx*vF+rx*vR; car.vy=fy*vF+ry*vR; car.x+=car.vx*dt; car.y+=car.vy*dt;
 
