@@ -753,7 +753,14 @@
     else if(vF>0){ vF=Math.max(0,vF-330*dt); }   // MANUAL: lifting off coasts down on engine braking rather than holding speed
     vF*=0.997; if(vF>targetTop)vF=targetTop; if(vF<-240)vF=-240;   // even LESS drag (0.992→0.996→0.997) → holds top-end on the straights where the INSANE pack pulls away; top speed still clamped by targetTop
 
-    const speedFactor=Math.min(1,spd/210), driftAuth=car.drifting?1.65:1.0; let steer=0; if(K.left)steer-=1; if(K.right)steer+=1;   // driftAuth = extra rotation while HOLDING space → the e-brake pivots into the corner, but SMOOTHLY (was 2.1 = too sharp/snappy). Still throws the tail; just more natural.
+    // ── DRIFT LOOSENESS (2026-08-05) ────────────────────────────────────────────────────────────────────────────
+    // Rob: "space bar drift needs to be a lil looser like the 1st version." Looseness and SHARPNESS are separate
+    // axes here and it matters which one moves: driftAuth is rotation authority, and it went 2.1 → 1.65 precisely
+    // because the pivot felt "too sharp/snappy". So it only gets a small nudge — the looseness comes from the
+    // SLIDE knobs instead (grip retain, maxSlide clamp, engage kick, high-speed plant), which is what actually
+    // hangs the tail out. Moving these together: grip .955→.968, maxSlide .85/130→.95/165, kick .24/170→.30/215,
+    // drift plant .20→.13, tail-steer entry 90→70.
+    const speedFactor=Math.min(1,spd/210), driftAuth=car.drifting?1.72:1.0; let steer=0; if(K.left)steer-=1; if(K.right)steer+=1;
     if(T.joy)steer=Math.max(-1,Math.min(1,T.steerAxis));   // analog joystick (mobile) overrides — partial steering for smooth finger control
     const hiK=Math.max(0,Math.min(1,(spd-270)/430));   // recalibrated for MAXSPD=560/BOOST_MAX=800 (was 330/520 for old 680/980). Restores the intended hiK≈0.67 at cruising / 1.0 at boost — cures the "crazy steering" caused by the speed nerf leaving hiSpeedDamp too weak.
     // SMOOTH STEERING — ease the input toward full lock instead of snapping, so fast cornering stays
@@ -761,18 +768,18 @@
     // ease a touch softer so fast corrections are PRECISE, not nervous/jerky.
     const easeRate=car.drifting?(11-hiK*2.5):(steer!==0?18-hiK*4:11+hiK*3);   // DRIFT: steer input eases in SMOOTHLY so the slide applies gradually & natural (NOT a snap) — the fix for "too sharp when drifting". GRIP: still quick/sharp on the straights.
     car.steerInput=(car.steerInput||0)+(steer-(car.steerInput||0))*Math.min(1,dt*easeRate);
-    const hiSpeedDamp=car.drifting?(1-0.20*hiK):(1-0.30*hiK);   // drift now keeps a MILD high-speed plant (was full/none = too wild) → smoother, more natural pivot while still going quick
+    const hiSpeedDamp=car.drifting?(1-0.13*hiK):(1-0.30*hiK);   // LOOSER: less high-speed plant while drifting (0.20→0.13) so the rear stays freer at pace. Grip driving keeps its full 0.30 plant — this only affects the skate.
     // AIRBORNE = ballistic: no steering, no drift — the car flies DEAD STRAIGHT off the ramp (a real jump)
     if((car.airZ||0)<=0){
       car.a+=car.steerInput*2.9*sMul.turn(PC)*UMUL.turn*driftAuth*speedFactor*hiSpeedDamp*dt;   // *UMUL.turn = Handling upgrade
       if((car.driftHold||0)>0)car.driftHold-=dt;                                   // tap-drift window counts down
       car.drifting=(K.drift||(car.driftHold>0))&&spd>45;                           // handbrake grabs at almost any moving speed now (was 70) → activates every time you hold SPACE
-      if(car.drifting && !car._wasDrift && spd>90){ const dir=steer!==0?-steer:(vR>0?1:-1); vR+=Math.min(170,spd*0.24)*dir; }   // ENGAGE KICK: snap the rear loose the instant you grab the brake so the skate breaks out visibly EVERY time
-      if(car.drifting && spd>90){ vR+=(-steer)*Math.min(spd*1.7,720)*dt;                              // TAIL STEER (Asphalt-style): HOLD the drift and steer INTO the slide to hang the tail out further, or COUNTER-STEER to wiggle it back and catch/regain control — a fully controllable, sustained skate you steer with the rear
-        const maxSlide=Math.abs(vF)*0.85+130; if(vR>maxSlide)vR=maxSlide; else if(vR<-maxSlide)vR=-maxSlide; }   // clamp the slide angle so even a hard drift can always be reined in — never a full uncontrolled spin
+      if(car.drifting && !car._wasDrift && spd>70){ const dir=steer!==0?-steer:(vR>0?1:-1); vR+=Math.min(215,spd*0.30)*dir; }   // ENGAGE KICK, harder (.24/170→.30/215) and biting from 70mph instead of 90 → the rear breaks loose sooner and more decisively
+      if(car.drifting && spd>70){ vR+=(-steer)*Math.min(spd*1.7,720)*dt;                              // TAIL STEER (Asphalt-style): HOLD the drift and steer INTO the slide to hang the tail out further, or COUNTER-STEER to wiggle it back and catch/regain control — a fully controllable, sustained skate you steer with the rear
+        const maxSlide=Math.abs(vF)*0.95+165; if(vR>maxSlide)vR=maxSlide; else if(vR<-maxSlide)vR=-maxSlide; }   // clamp RAISED (.85/130→.95/165) so the tail can hang noticeably further out — still a hard ceiling, so a drift can always be reined in and never becomes an uncontrolled spin
     } else { car.drifting=false; }
     let grip=sMul.gripRetain(PC);
-    if(car.drifting) grip=0.955;                                                            // hold-SPACE drift: HIGH lateral retain = the rear stays hung out in a long, loose Asphalt-style SKATE (grip is retain-fraction: higher = more slide). Scrub carries FORWARD below, so it holds speed — never drags.
+    if(car.drifting) grip=0.968;                                                            // hold-SPACE drift: THE looseness knob (retain-fraction — higher = more slide). .955→.968 so the rear stays hung out longer before the tail scrubs back in. Scrub still carries FORWARD below, so a longer slide does not bleed speed.
     else if((car.exitT||0)>0){ const k=Math.min(1,car.exitT/0.6); grip=grip+(0.96-grip)*k*0.72; }   // DRIFT EXIT: traction eases loose→full over a SHORT window → regrips quick and shoots out, no lingering slide
     else grip=Math.max(0.55, grip-0.12*hiK);   // HIGH-SPEED TRACTION: the rear bites progressively harder the faster you go → the car HOLDS its chosen line at top speed instead of washing wide (top speed untouched)
     const lateralScrub=vR*(1-grip); vR*=grip;
