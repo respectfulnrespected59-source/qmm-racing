@@ -779,7 +779,15 @@
         const maxSlide=Math.abs(vF)*0.95+165; if(vR>maxSlide)vR=maxSlide; else if(vR<-maxSlide)vR=-maxSlide; }   // clamp RAISED (.85/130→.95/165) so the tail can hang noticeably further out — still a hard ceiling, so a drift can always be reined in and never becomes an uncontrolled spin
     } else { car.drifting=false; }
     let grip=sMul.gripRetain(PC);
-    if(car.drifting) grip=0.968;                                                            // hold-SPACE drift: THE looseness knob (retain-fraction — higher = more slide). .955→.968 so the rear stays hung out longer before the tail scrubs back in. Scrub still carries FORWARD below, so a longer slide does not bleed speed.
+    // HOLD-SUSTAIN. The drift FLAG survived a held SPACE fine, but the SLIDE did not: tail steer only feeds vR while
+    // you are actively steering, so the instant you straightened for corner exit nothing fed it and the 0.968 retain
+    // ate ~86% of the slide per second — the skate died mid-exit with SPACE still down. Now, while SPACE is held and
+    // the wheel is near neutral, the retain goes almost lossless so the slide carries all the way out of the corner.
+    // Any real steering input — into the slide OR countersteer — drops straight back to 0.968, so entry feel is
+    // unchanged and countersteer still catches the car (helped by the -steer*720/s removal and the maxSlide clamp).
+    // Both branches are now dt-corrected via pow(retain, dt*60); they match the old values exactly at 60fps and no
+    // longer decay twice as fast at 120fps, which the bare per-frame multiply did.
+    if(car.drifting) grip=(Math.abs(car.steerInput||0)<0.25 && spd>70) ? Math.pow(0.997,dt*60) : Math.pow(0.968,dt*60);
     else if((car.exitT||0)>0){ const k=Math.min(1,car.exitT/0.6); grip=grip+(0.96-grip)*k*0.72; }   // DRIFT EXIT: traction eases loose→full over a SHORT window → regrips quick and shoots out, no lingering slide
     else grip=Math.max(0.55, grip-0.12*hiK);   // HIGH-SPEED TRACTION: the rear bites progressively harder the faster you go → the car HOLDS its chosen line at top speed instead of washing wide (top speed untouched)
     const lateralScrub=vR*(1-grip); vR*=grip;
@@ -816,7 +824,10 @@
     screechUpdate(car.drifting||hardCorner, Math.abs(vR)+(hardCorner?120:0));   // ONLY on real slides (e-brake drift or hard high-speed slip) — no more screech on every little turn
 
     const slip=Math.abs(vR);
-    if(car.drifting&&slip>60&&spd>165){ car.m=Math.min(100,car.m+(slip/900)*dt*38*(night?2:1));
+    // Meter gates widened (slip 60→45, spd 165→130) to match the driftCharge gate below, so the M24.9e bar fills
+    // from drift ENTRY and keeps filling through apex and exit for the whole held SPACE — the "build up boost" half
+    // of the ask. Boost is still spent manually with SHIFT; nothing auto-fires.
+    if(car.drifting&&slip>45&&spd>130){ car.m=Math.min(100,car.m+(slip/900)*dt*38*(night?2:1));
       const smCol=car.driftCharge>2.0?'#8fe8e8':car.driftCharge>1.1?'#e0a468':null;   // TIERED smoke — heats up with the drift charge (white → amber → cyan)
       if(Math.random()<0.9)smoke.push({x:car.x-fx*30,y:car.y-fy*30,r:9+Math.random()*10,a:0.5,col:smCol,vx:-car.vx*0.05+(Math.random()-.5)*40,vy:-car.vy*0.05+(Math.random()-.5)*40});
       if(!lite&&Math.random()<0.7)smoke.push({x:car.x-fx*38+(Math.random()-.5)*20,y:car.y-fy*38+(Math.random()-.5)*20,r:7+Math.random()*7,a:0.42,col:smCol,vx:-car.vx*0.04+(Math.random()-.5)*60,vy:-car.vy*0.04+(Math.random()-.5)*60}); }   // denser PS3 billow on the hotter tiers (FULL/PHOTO only)
