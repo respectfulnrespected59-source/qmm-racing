@@ -165,13 +165,92 @@ drivable.
 
 ---
 
+## UHD polish pass — 2026-08-05, second rig
+
+Added on top of the chase renderer. Nothing here changed the camera rig or the flat
+renderer's structure.
+
+**Surfaces.** The tarmac was a single flat fill, which reads as a painted colour rather
+than a surface. It now stacks: a cached screen-space depth ramp (`roadSheen`),
+transverse slab seams (`p3Seams` — seams flicking past are a large part of why speed
+reads as speed), longitudinal pour lines, kerb grime, and a racing line built as a dark
+core inside a lighter sheen halo, because rubbered-in tarmac is *polished*, not merely
+darker.
+
+**Buildings.** Every visible wall used to take the identical flat colour — that, not
+the lack of texture, is why they read as paper cutouts. Faces now take a lambert term
+against `SUN3`, a **fixed world-space key**. Do not tie it to the camera: a key that
+swings as you steer makes every facade pulse, and it reads as flicker rather than as
+light. Plus corner catch-lights, a sky-catch band up top, one extra batched pass for a
+glass highlight on every window head, roof furniture to break the skyline, and a lit
+ground-floor shopfront band.
+
+**Cars.** Rear face rebuilt as slim Camaro-style clusters quartered by a dark cross.
+The failed first attempt is the instructive part: lamps covering 48% of the face height
+and 84% of its width, *plus* a body-colour accent band, *plus* a glow radius scaled off
+the full body width, summed to a solid red box. Lamps must be a small bright accent on
+a mostly dark tail. Body flanks take the same `SUN3` lambert plus a shoulder line where
+flank meets roof — that highlight is the single cue separating glossy paint from a matte
+block. **Rivals now have a brake signal** (`r._brk`, from real deceleration with a 0.22s
+hold); before this, `braking` was hardcoded `isPlayer ? K.brake : false`, so tail lights
+only ever lit on the one car you cannot see them on.
+
+**Nitro flame.** The 3D path drew three axis-aligned ellipses that ignored `p.rot`
+entirely, so the plume never pointed anywhere and read as bubbles. It is now tapered
+world-space geometry along the exhaust axis — perspective orients and foreshortens it
+for free. Length is deliberately generous: at the camera's 0.73 angle a physically-tidy
+plume foreshortens into a flicker and has to overshoot to read.
+
+**HUD.** One shared `hudPanel()` glass treatment across leaderboard, lap block,
+speedometer and minimap. Gradients are cached and **invalidated on the resize event,
+not inside `resize()`** — `resize()` is called immediately at its definition, long
+before those caches are declared, and touching a `let`/`const` in its temporal dead
+zone throws. (`typeof` does not save you there either.)
+
+---
+
+## The trap that cost the most time here
+
+**`PERF.lvl` silently switches new effects off.** The governor climbs to 3+ on a
+GPU-less / headless-SwiftShader rig and stays there, so anything written
+`if(... && PERF.lvl < 3)` is simply never drawn. A brand-new effect then looks broken
+while the code is perfectly correct: geometry verified, no JS error, nothing on screen.
+
+The diagnostic that settles it in one shot — re-render at a loud colour and high alpha
+(`#00ff00`, alpha 0.95). Still nothing means the **guard** is false, not the geometry;
+then strip conditions one at a time. Do not keep re-reading the drawing code.
+
+Standing rule from this: gate *garnish* on `PERF.lvl`, never gate *readability* on it.
+Night headlight cones and the road depth-sheen were both wrongly gated and were
+therefore invisible on exactly the weak rigs that need them most. `!lite` is the right
+gate for those — `lite` is the player's explicit choice, the governor is not.
+
+The same mistake has an LOD flavour: roof furniture gated to the *close* radius never
+appeared, because a skyline silhouette is read at *distance*. Match the LOD radius to
+the distance at which the feature is actually perceived.
+
+**Measuring.** The first rAF sample after page load is a warm-up outlier — one build
+measured p50 18.6 / p99 40.6 and settled to 17.0 / 22.0 over the next three runs. Take
+3+ samples and discard the first. This box also drifts over a long session, so compare
+builds **back to back via `git stash` in the same browser session**, never against a
+number from an hour ago. Final for this pass: p50 16.7–17.6 ms, 0% frames over 50 ms,
+against a pristine-HEAD p50 of 16.7 measured the same way. The p99 spikes appear
+identically in both builds, so they are the machine, not the code.
+
+---
+
 ## Still open
 
 - **Landmarks**: `park`, `lake`, `gas`, `school` interiors are fairly plain in 3D —
   the stadium, pyramids, sphinx and Golden Gate got the most attention.
-- **Night mode** in the 3D view has had far less eyes-on than day. Headlight cones
-  exist in the flat renderer but were never ported.
+- **Night mode** is much closer now — headlight cones are ported and ground floors
+  light up — but it has still had far less eyes-on than day.
 - **Figure-8 / Cross-Country** tracks render their water, overpass and jump ramp, but
   haven't been driven end-to-end in chase view.
-- The **flat renderer** still carries all the old top-down polish (flower checkpoints,
-  turn-guide chevrons, wet reflection streaks) that has only partly been carried over.
+- The **flat renderer** still carries old top-down polish (flower checkpoints,
+  turn-guide chevrons, wet reflection streaks) only partly carried over.
+- **Menus / garage / results screens** were deliberately left out of the UHD pass.
+- `rebuild-zip.py` hardcodes `os.chdir(r'C:\Users\respe\qmm-racing')`, which is not
+  where the checkout lives on every rig. Fix the path before trusting it.
+- All of the above was verified on headless SwiftShader, 3–5× slower than real Chrome.
+  Judge the *look* on a real machine.
