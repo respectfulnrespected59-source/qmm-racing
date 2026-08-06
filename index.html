@@ -1733,7 +1733,14 @@
       ctx.fillStyle=sg; ctx.fillRect(0,0,W,HZ+1);
       const gg=ctx.createLinearGradient(0,HZ,0,H);
       gg.addColorStop(0,night?_t.nSkyOut:_t.skyOut); gg.addColorStop(0.14,GROUND); gg.addColorStop(1,GROUND);
-      ctx.fillStyle=gg; ctx.fillRect(0,HZ,W,H-HZ); }
+      ctx.fillStyle=gg; ctx.fillRect(0,HZ,W,H-HZ);
+      // Photoreal ground on top of the flat fill. The flat fill stays underneath as the base colour, so a texture
+      // that has not loaded yet, or a rig running LITE, degrades to exactly the old look rather than to nothing.
+      // Gated on !lite only, NOT on PERF.lvl. The governor pins at 3+ on a GPU-less rig and never climbs back, so a
+      // PERF gate here means the feature is simply never seen on the machines it was built for — the same trap that
+      // hid the night headlights. LITE is the player's explicit escape hatch and the half-res buffer keeps the cost
+      // to ~1-2ms, so this is affordable without the governor's help.
+      if(!lite)p3GroundTex(); }
     if(_t.sun&&!night){ const sg2=ctx.createRadialGradient(W*0.5,HZ*0.55,8,W*0.5,HZ*0.55,H*0.5); sg2.addColorStop(0,'rgba(255,246,206,0.8)'); sg2.addColorStop(1,'rgba(255,226,150,0)'); ctx.fillStyle=sg2; ctx.fillRect(0,0,W,H); }
 
     const HALF=ROAD_W*0.5;
@@ -2020,6 +2027,74 @@
     arr[bk]=v; return v;
   }
   // A building as a real box: base footprint on the ground, roof at z=h3d, only the walls facing the lens drawn.
+  // ── MODE-7 PHOTOREAL GROUND ───────────────────────────────────────────────────────────────────────────────────
+  // canvas2d is affine-only, so a ground texture cannot be drawn as one perspective quad — it visibly swims. The
+  // classic fix (OutRun, F-Zero, Mario Kart) is to slice the ground into horizontal bands and give each band its own
+  // transform, which is exact at the band's depth and near-exact across its few pixels of height.
+  //
+  // Screen row -> ground distance falls straight out of the projection: at z=0,
+  //     screenY = horizon + camH*focal/f      =>      f = camH*focal/(screenY - horizon)
+  // Linearising screenY about a band's centre distance fc gives a genuine affine world->screen map for that band:
+  //     s = focal/fc,  A = camH*s,  B = A/fc
+  //     sx = W/2 + s*((p-cam)·right)          sy ~= (horizon + A + B*fc) - B*((p-cam)·heading)
+  // Expanded into canvas matrix terms that is [a c e; b d f] below. A CanvasPattern carries the tile repeat, so each
+  // band costs one setTransform + one fillRect, and the bands together cover the ground exactly once.
+  const WORLDTEX={}, WORLDPAT={};
+  const WORLD_TILE=1600;      // world units one tile spans — smaller = denser city detail
+  const WORLD_FAR=4200;       // beyond this the texture is sub-pixel and the haze owns it
+  function worldTexName(){ return curTheme==='sf'?'city_sf':curTheme==='egypt'?'city_egypt':curTheme==='tokyo'?'city_tokyo':'city_hood'; }
+  function worldTex(){
+    const n=worldTexName();
+    let im=WORLDTEX[n];
+    if(!im){ im=new Image(); im.src='assets/world/'+n+'.jpg'; WORLDTEX[n]=im; }
+    return (im.complete && im.naturalWidth>0) ? im : null;   // never block a frame on a half-loaded texture
+  }
+  // HALF-RESOLUTION BUFFER. Pattern sampling is per-pixel, and covering the lower screen at full res cost ~16ms a
+  // frame on a software rasteriser — p50 went 17ms -> 34ms, i.e. half the frame rate. Rendering the ground into a
+  // half-size canvas quarters the sampled pixels, and the upscale is one cheap nearest-neighbour blit. Smoothing is
+  // off throughout: bilinear is a 4-tap filter per pixel and buys nothing on a hazed ground plane.
+  let _gndCv=null,_gndCtx=null,_gndPat=null,_gndPatFor='';
+  const GND_SC=0.5;
+  function p3GroundTex(){
+    const im=worldTex(); if(!im)return false;
+    const n=worldTexName();
+    const gw=Math.max(1,Math.ceil(W*GND_SC)), gh=Math.max(1,Math.ceil(H*GND_SC));
+    if(!_gndCv||_gndCv.width!==gw||_gndCv.height!==gh){
+      _gndCv=document.createElement('canvas'); _gndCv.width=gw; _gndCv.height=gh;
+      _gndCtx=_gndCv.getContext('2d'); _gndPat=null; }
+    const g=_gndCtx; if(!g)return false;
+    if(!_gndPat||_gndPatFor!==n){ _gndPat=g.createPattern(im,'repeat'); _gndPatFor=n; }
+    const pat=_gndPat; if(!pat||!pat.setTransform)return false;   // very old canvas — fall back to flat ground
+    const HZ=P3.horizon, camH=P3.height, foc=P3.focal, ca=P3.ca, sa=P3.sa, cx=P3.cx, cy=P3.cy;
+    const k=WORLD_TILE/im.naturalWidth;                      // texture pixels -> world units
+    const yTop=Math.max(HZ+1, HZ+camH*foc/WORLD_FAR);        // first row whose ground distance is inside WORLD_FAR
+    const BAND=10;
+    g.setTransform(1,0,0,1,0,0);
+    g.clearRect(0,0,gw,gh);
+    g.imageSmoothingEnabled=false;
+    for(let y=yTop; y<H; y+=BAND){
+      const h=Math.min(BAND,H-y), yc=y+h*0.5, dy=yc-HZ;
+      if(dy<=0.5)continue;
+      const fc=camH*foc/dy; if(fc>WORLD_FAR)continue;
+      const s=foc/fc, A=camH*s, B=A/fc, K=HZ+A+B*fc;
+      // same affine as the full-res derivation, premultiplied by GND_SC so it lands in the half-size buffer
+      const a=-s*sa, c=s*ca, e=W/2+s*(cx*sa-cy*ca);
+      const b=-B*ca, d=-B*sa, f=K+B*(cx*ca+cy*sa);
+      const S=GND_SC;
+      // fade the plates into the horizon haze so the tile seam never announces itself at distance
+      const t=fc/WORLD_FAR;
+      g.globalAlpha=(night?0.42:0.92)*Math.max(0,1-t*t);
+      pat.setTransform(new DOMMatrix([a*k*S,b*k*S,c*k*S,d*k*S,e*S,f*S]));
+      g.fillStyle=pat;
+      g.fillRect(0,y*S,gw,h*S+1);                            // +1 overlap kills hairline seams between bands
+    }
+    g.globalAlpha=1;
+    const sm=ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(_gndCv,0,0,gw,gh,0,0,W,H);
+    ctx.imageSmoothingEnabled=sm;
+    return true;
+  }
   // Fixed key-light direction in world space for facade shading. Deliberately NOT tied to the camera — a key that
   // swings with the lens makes every building change brightness as you steer, which reads as flickering rather than
   // as light. A constant direction means the city has one sun and you drive around inside it.
