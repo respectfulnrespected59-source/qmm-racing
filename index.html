@@ -205,8 +205,18 @@
 (() => {
   const cv=document.getElementById('c'), ctx=cv.getContext('2d');
   let W,H,DPR;
-  function resize(){ DPR=Math.min(window.devicePixelRatio||1,2); W=window.innerWidth; H=window.innerHeight; cv.width=W*DPR; cv.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
+  // RENDER SCALE — the backing store is the single biggest raster cost. The perf governor (bottom of file) lowers
+  // this on rigs that can't hold 60fps instead of letting the frame rate collapse. 1.5 is the ceiling: DPR 2 on a
+  // HiDPI panel quadruples the pixels rasterised per frame for almost no visible gain on a top-down racer.
+  let DPRCAP=1.5;
+  function resize(){ DPR=Math.min(window.devicePixelRatio||1,DPRCAP); W=window.innerWidth; H=window.innerHeight; cv.width=W*DPR; cv.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
   window.addEventListener('resize',resize); resize();
+  // ===== VIEW-RECT CULLING =====
+  // World-space rectangle the camera can actually see this frame, refreshed once in draw(). Every world layer culls
+  // against THIS instead of a hard-coded radius — the old fixed radii (1200–1600 units) drew 3–5× more geometry than
+  // the screen could ever show, which is what was pinning the frame rate.
+  let VX0=-1e9,VY0=-1e9,VX1=1e9,VY1=1e9;
+  const inView=(x,y,m)=>x>VX0-m&&x<VX1+m&&y>VY0-m&&y<VY1+m;
 
   const COL={purple:'#2D1B4E',gold:'#C9A84C',orange:'#E8843C',ink:'#0B0713',cyan:'#4CE0E0',red:'#C43B3B'};
   // ===== CAR ROSTER (player-selectable in the Garage) — real-car-inspired top-down sprites + tuned stats =====
@@ -217,7 +227,8 @@
     {id:'challenger',file:'car_challenger.png',s:0.145, name:'GHOST CAT',   driver:'LIL TEE',  cls:'MUSCLE', color:'#8a8f96', spd:86,acc:85,hdl:66,grp:70},
     {id:'corvette',  file:'car_corvette.png',  s:0.169, name:'STINGRAY Z',  driver:'AMARA',    cls:'SPORTS', color:'#e8c020', spd:90,acc:86,hdl:82,grp:80},
     {id:'m6',        file:'car_m6.png',        s:0.140, name:'BAVARIA M6',  driver:'NIA',      cls:'GT',     color:'#1c3a8a', spd:84,acc:80,hdl:84,grp:82},
-    {id:'r8',        file:'car_r8.png',        s:0.145, name:'QUATTRO R8',  driver:'MARCUS',   cls:'SUPER',  color:'#e6e6e6', spd:92,acc:88,hdl:86,grp:86, flip:true},   // NEW clean top-down sprite (2026-07-10) — nose-DOWN → flip:true faces it forward; s=0.145 (0.132 was too small)
+    // QUATTRO R8 (car_r8.png) PULLED — that sprite is a 3/4 view, so it read as sitting UP off the tarmac instead of
+    // lying flat like every other top-down car. Asset stays on disk in case a proper flat sprite gets drawn later.
     {id:'918',       file:'car_918.png',       s:0.144, name:'SPYDER NINE', driver:'KOFI',     cls:'HYPER',  color:'#d0a070', spd:95,acc:92,hdl:88,grp:84, flip:true},   // nose-down sprite → vertical flip
     {id:'lambo',     file:'car_lambo.png',     s:0.177, name:'TORO VERDE',  driver:'ZAHARA',   cls:'HYPER',  color:'#8fd000', spd:94,acc:90,hdl:80,grp:78},
     {id:'ct6',       file:'car_ct6.png',       s:0.137, name:'BLACKTOP CT', driver:'BIG RIO',  cls:'LUXURY', color:'#2a2a2a', spd:82,acc:76,hdl:74,grp:80},
@@ -426,6 +437,10 @@
 
   // ============ TRACK (3 difficulties) ============
   const CX=0,CY=0; const TRACK=[],NRM=[],props=[],CP=[],puddles=[],crowd=[],lamps=[],cracks=[]; const TN=220,NCP=6;
+  // CACHED TRACK GEOMETRY — the road is stroked ~10× per frame (tarmac, wet gloss, sheen, wear grooves, lane dashes).
+  // Re-walking 220 points into a fresh path each time meant re-tessellating the same curve ten times a frame; baking
+  // it into a Path2D once per track lets the rasteriser reuse the geometry.
+  let ROADP=null, GROOVEP=null, SEAMP=null, CRACKP=null;
   let BRIDGE=null, JUMP=null;   // BRIDGE = self-crossing overpass point; JUMP = ramp/air zone (stunt track)
   let OPEN=false, WATER=null, FINISHIDX=0;   // OPEN = point-to-point cross-country stage (checkpoints, not laps); WATER = bridge-over-water zone
   let ROAD_W=420, TOTAL_LAPS=3, curDiff='medium', curSpd=1;
@@ -444,9 +459,9 @@
   let curTheme='hood';
   const landmarks=[], deco=[];   // landmarks = big set-pieces (pyramids/sphinx/golden gate); deco = palms/obelisks/trees/poles along the road
   const THEMES={
-    hood:{  skyIn:'#3a2a5c', skyOut:'#160f28', nSkyIn:'#1a1030', nSkyOut:'#05030a', road:'#141026', nRoad:'#0d0a18', lane:'rgba(201,168,76,.55)', build:'neon',      crowd:'hood'  },
-    egypt:{ skyIn:'#e8cf92', skyOut:'#caa25c', nSkyIn:'#2e2440', nSkyOut:'#141024', road:'#b39566', nRoad:'#5c4a34', lane:'rgba(90,60,26,.6)',    build:'sandstone', crowd:'egypt', sun:true, palms:true },
-    sf:{    skyIn:'#aebccb', skyOut:'#74869c', nSkyIn:'#1c2636', nSkyOut:'#0a1220', road:'#3b414c', nRoad:'#1b2130', lane:'rgba(240,240,240,.5)', build:'victorian', crowd:'sf',    fog:true } };
+    hood:{  skyIn:'#3a2a5c', skyOut:'#160f28', nSkyIn:'#1a1030', nSkyOut:'#05030a', road:'#141026', nRoad:'#0d0a18', lane:'rgba(201,168,76,.55)', build:'neon',      crowd:'hood',  ground:'#241a42', nGround:'#0e0a1c', haze:'#2a1f4c' },
+    egypt:{ skyIn:'#e8cf92', skyOut:'#caa25c', nSkyIn:'#2e2440', nSkyOut:'#141024', road:'#b39566', nRoad:'#5c4a34', lane:'rgba(90,60,26,.6)',    build:'sandstone', crowd:'egypt', sun:true, palms:true, ground:'#d8bc84', nGround:'#4a3c28', haze:'#e0c48c' },
+    sf:{    skyIn:'#aebccb', skyOut:'#74869c', nSkyIn:'#1c2636', nSkyOut:'#0a1220', road:'#3b414c', nRoad:'#1b2130', lane:'rgba(240,240,240,.5)', build:'victorian', crowd:'sf',    fog:true, ground:'#5c6b56', nGround:'#1e2630', haze:'#96a4b4' } };
   function TH(){ return THEMES[curTheme]||THEMES.hood; }
   const DIFFS={
     // EASY stays the basic wide oval. Everything above it snakes through real S-curves (2*k of them).
@@ -540,7 +555,19 @@
     boosts.length=0; const nB=OPEN?12:8;
     for(let b=0;b<nB;b++){ const idx=OPEN?Math.round((b+1)/(nB+1)*(TN-1)):Math.floor((b+0.5)/nB*TN)%TN;
       if(idx<3||(WATER&&idx>=WATER.a-2&&idx<=WATER.b+2))continue; const p=TRACK[idx],n=NRM[idx],lane=((b%3)-1)*ROAD_W*0.26;
-      boosts.push({x:p.x+n.x*lane,y:p.y+n.y*lane,cd:0,ph:b*0.7}); } buildThemeDecor(); }
+      boosts.push({x:p.x+n.x*lane,y:p.y+n.y*lane,cd:0,ph:b*0.7}); }
+    bakeTrackPaths(); buildThemeDecor(); }
+  // Bake the static tarmac geometry once per track so draw() can stroke pre-tessellated paths instead of rebuilding
+  // the same 220-point curve ten times every single frame.
+  function bakeTrackPaths(){
+    ROADP=new Path2D(); TRACK.forEach((p,i)=>i?ROADP.lineTo(p.x,p.y):ROADP.moveTo(p.x,p.y)); if(!OPEN)ROADP.closePath();
+    GROOVEP=new Path2D();   // the two worn bands where tires ride
+    for(const gs of [-1,1]){ for(let i=0;i<TRACK.length;i++){ const p=TRACK[i],n=NRM[i], x=p.x+n.x*ROAD_W*0.19*gs, y=p.y+n.y*ROAD_W*0.19*gs; i?GROOVEP.lineTo(x,y):GROOVEP.moveTo(x,y); } if(!OPEN)GROOVEP.closePath(); }
+    SEAMP=new Path2D();     // expansion joints across the road
+    for(let i=6;i<TRACK.length;i+=12){ const p=TRACK[i],n=NRM[i]; SEAMP.moveTo(p.x-n.x*ROAD_W*0.5,p.y-n.y*ROAD_W*0.5); SEAMP.lineTo(p.x+n.x*ROAD_W*0.5,p.y+n.y*ROAD_W*0.5); }
+    CRACKP=new Path2D();    // every hairline crack in one path — one stroke call instead of ~40
+    for(const c of cracks){ for(let i=0;i<c.length;i++)i?CRACKP.lineTo(c[i].x,c[i].y):CRACKP.moveTo(c[i].x,c[i].y); }
+  }
   function nearestTrack(px,py){ let best=1e12,idx=0; for(let i=0;i<TN;i++){ const dx=TRACK[i].x-px,dy=TRACK[i].y-py,d=dx*dx+dy*dy; if(d<best){best=d;idx=i;} } return {dist:Math.sqrt(best),idx}; }
 
   // ============ CARS ============
@@ -551,9 +578,23 @@
   let finishSeq=0;
   let rivals=[], smoke=[],trail=[],sparks=[],skid=[],boosts=[];   // boosts = drive-through hyper-boost capsules
   let rings=[], camPunch=0, bestFlash=0;   // rings = expanding impact shockwaves; camPunch = subtle camera zoom-punch on boost/drift-release; bestFlash = HUD best-lap celebration timer
-  let camMode=1, camAng=0;   // camera: 0=CLASSIC (far top-down) · 1=CLOSE (default) · 2=DRONE (chase behind the car). camAng = smoothed chase heading. Cycle with C.
-  try{ const _cm=localStorage.getItem('qmCam'); if(_cm!=null){ const v=parseInt(_cm,10); if(v>=0&&v<=1)camMode=v; } }catch(e){}   // clamp 0-1 (drone mode 2 retired)
-  function cycleCam(){ camMode=(camMode+1)%2; try{localStorage.setItem('qmCam',camMode);}catch(e){} const nm=['BIRDS-EYE','CLOSE'][camMode]; raceMsg='📷 CAM: '+nm; raceMsgT=1.3; const cb=document.getElementById('camBtn'); if(cb)cb.title='Camera: '+nm+' (C)'; }   // shared by the C key + the 🎥 button (2 modes: far birds-eye / close)
+  // CAMERA: 0=CHASE (default — true behind-the-car pseudo-3D, road running to a horizon) · 1=BIRDS-EYE (far top-down)
+  //         2=CLOSE (mid top-down). The two top-down modes share the old flat renderer; CHASE uses draw3D().
+  // camAng = the heading the chase camera trails, eased toward the direction of TRAVEL (not the body angle) so a drift
+  // reads as the car stepping sideways across the screen instead of the whole city snapping round with the nose.
+  let camMode=0, camAng=0;
+  const CAMNAMES=['CHASE','BIRDS-EYE','CLOSE'];
+  // ── CHASE CAMERA RIG (dialled in by eye at speed, then baked) ──
+  //   CAM_H    — lens height above the tarmac. CAM_H/CAM_BACK is the ANGLE: 0.65 here, so it keeps the elevated,
+  //              near-overhead vantage of the original top-down view while perspective runs the road out to a
+  //              horizon, which is what shows you far more of the street ahead than an orthographic camera can.
+  //   CAM_BACK — how far behind the car the lens sits.
+  //   CAM_CARY — where the car sits vertically in frame. The horizon is DERIVED from this (see p3Update), so the
+  //              car stays planted at this spot regardless of window size or the other two values.
+  const CAM_H=400, CAM_BACK=545, CAM_CARY=0.80;   // ratio 0.73 — back up high so you look down onto the roof rather than at the body's side walls; the rear face is still angled toward you enough to read its lights
+  let CAMX=0, CAMY=0;   // world point at the centre of the screen — top-down parallax + culling key off THIS, not the car
+  try{ const _cm=localStorage.getItem('qmCam3'); if(_cm!=null){ const v=parseInt(_cm,10); if(v>=0&&v<=2)camMode=v; } }catch(e){}   // fresh key so the chase view lands as the default once
+  function cycleCam(){ camMode=(camMode+1)%3; try{localStorage.setItem('qmCam3',camMode);}catch(e){} const nm=CAMNAMES[camMode]; raceMsg='📷 CAM: '+nm; raceMsgT=1.3; const cb=document.getElementById('camBtn'); if(cb)cb.title='Camera: '+nm+' (C)'; }   // shared by the C key + the 🎥 button
   function ring(x,y,col,sp){ if(rings.length>=22)rings.shift(); rings.push({x,y,r:20,a:0.85,col,sp:sp||520}); }   // BOUNDED (22 max) — cheap stroked-arc shockwave
   const rain=[]; let rainLast=0;   // screen-space rain streaks (wet mode)
   const MAXSPD=560,BOOST_MAX=800,HEAT_MAX=100,CARSCALE=1.2;   // dampened top speed for more control (~18% cut from 680/980 for slower-reflex friendliness); CARSCALE bumps sprite size to show UHD detail
@@ -571,24 +612,62 @@
     const p0=TRACK[0], fwd=Math.atan2(TRACK[1].y-p0.y,TRACK[1].x-p0.x);
     const fx=Math.cos(fwd),fy=Math.sin(fwd),lx=NRM[0].x,ly=NRM[0].y;
     const place=(back,lat)=>({x:p0.x-fx*back+lx*lat, y:p0.y-fy*back+ly*lat});
-    const pp=place(60,-72); car.x=pp.x; car.y=pp.y; car.vx=0;car.vy=0;car.m=0;car.boostT=0;car.bank=0;car.wheelSteer=0;car.lap=0; car.a=fwd; car.slide=0; car.driftCharge=0; car.driftHold=0; car._wasDrift=false; car.airT=0; car.airZ=0; car._jumped=false; car.steerInput=0; car.hyperT=0; car.pitch=0; car._lastSpd=0; car._bf=0; car._bfCd=0; car._m24flash=0; car._rank=null; car._passed=null; for(const b of boosts)b.cd=0;
+    // STARTING GRID — a car sprite is 1024*s*CARSCALE ≈ 200px long, but the old grid stacked rows only 96 units apart
+    // and 72 off centre, so the field spawned inside each other. Rows are now spaced by more than a full car length.
+    const ROWGAP=215, LANE=Math.min(112,ROAD_W*0.26);
+    const pp=place(70,-LANE); car.x=pp.x; car.y=pp.y; car.vx=0;car.vy=0;car.m=0;car.boostT=0;car.bank=0;car.wheelSteer=0;car.lap=0; car.a=fwd; car.slide=0; car.driftCharge=0; car.driftHold=0; car._wasDrift=false; car.airT=0; car.airZ=0; car._jumped=false; car.steerInput=0; car.hyperT=0; car.pitch=0; car._lastSpd=0; car._bf=0; car._bfCd=0; car._m24flash=0; car._rank=null; car._passed=null; for(const b of boosts)b.cd=0;
     smoke=[];trail=[];sparks=[];skid=[]; rings=[]; camPunch=0; bestFlash=0; camAng=car.a; car._pRank=0; car._ovCd=0; car.driftChain=0; car.chainT=0; lap=0;best=null;nextCP=0;lapReady=false; score=0;combo=0;comboT=0; car.clean=0;
     cops=[]; heat=0; heatStars=0; escapeT=0; copSpawnCd=0; sirenT=0;   // reset the patrol each race
-    rivals=[]; const D=DIFFS[curDiff], grid=[[60,72],[156,-72],[156,72],[252,-72],[252,72]]; finishSeq=0; car.place=null;   // player = front-left; rivals fill the rest
+    rivals=[]; const D=DIFFS[curDiff], grid=[[70,LANE],[70+ROWGAP,-LANE],[70+ROWGAP,LANE],[70+ROWGAP*2,-LANE],[70+ROWGAP*2,LANE]]; finishSeq=0; car.place=null;   // player = front-left; rivals fill the rest
     const pool=CARS.map((_,i)=>i).filter(i=>i!==playerCar);   // rivals drive every car EXCEPT the player's pick
     for(let k=0;k<D.rN;k++){ const g=place(grid[k][0],grid[k][1]); const ci=pool[k%pool.length]; rivals.push({x:g.x,y:g.y,a:fwd,idx:2,lap:0,speed:D.rSpd+k*D.rStep,carIdx:ci,name:CARS[ci].driver,col:{b:'#1a1a22',s:CARS[ci].color},finished:false,place:null,bumpCd:0,aggr:0.95+Math.random()*0.55}); }   // aggr = how hard this driver fights for position (raised min from 0.7 → 0.95 so no weak-willed drivers)
+    // WARM THE SPRITES DURING THE COUNTDOWN. Turn frames were lazy-loaded the first time a car steered, so the first
+    // corner of every race paid for an image fetch + decode + canvas flip — felt exactly like the car catching on
+    // something. Kick them all off now, while nobody is driving yet.
+    loadTurn(CARS[playerCar]); for(const r of rivals)loadTurn(CARS[r.carIdx||0]);
+    if(photo){ loadPhoto(CARS[playerCar]); for(const r of rivals)loadPhoto(CARS[r.carIdx||0]); }
     phase='countdown'; cdT=3.0; goFlash=0; lastCd=99; raceMsg=''; raceMsgT=0;
   }
 
   // ============ INPUT ============
-  const keys={},K={left:false,right:false,drift:false,boost:false,brake:false};
+  // ===== CONTROL SCHEMES =====
+  //  AUTO (default, and what the game ships with) — the car always accelerates and SPACE is a hold-to-drift
+  //  handbrake. This is the scheme the whole game is tuned around and the one that keeps an arcade browser racer
+  //  flowing; a throttle key only adds a way to lose speed by accident.
+  //  MANUAL — SPACE is the throttle, and blipping it off/on within 260ms latches a held drift. Tried 2026-08-05
+  //  and set aside as not fitting the feel; kept behind G in case it's ever wanted again, but nothing in the UI
+  //  points at it and no player will land on it by accident.
+  let MANUAL=false;
+  try{ const s=localStorage.getItem('qmCtrl2'); if(s!=null)MANUAL=(s==='1'); }catch(e){}   // fresh key so the revert actually lands over any stored preference
+  const keys={},K={left:false,right:false,drift:false,boost:false,brake:false,gas:true};
+  let _gasPrev=false,_lastGasDown=0,_lastGasUp=0,_driftLatch=false;
+  function toggleCtrl(){ MANUAL=!MANUAL; _driftLatch=false; try{ localStorage.setItem('qmCtrl2',MANUAL?'1':'0'); }catch(e){}
+    raceMsg=MANUAL?'🎮 SPACE = GAS · DOUBLE-TAP+HOLD = DRIFT':'🎮 AUTO GAS · HOLD SPACE = DRIFT'; raceMsgT=2.2; }
   window.addEventListener('keydown',e=>{ keys[e.code]=true; if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code))e.preventDefault();
-    if(e.code==='Space' && !e.repeat && car)car.driftHold=Math.max(car.driftHold||0,0.42);   // tap-grace: a last-second STAB into a corner reliably catches a slide (0.42s = long enough to steer through the apex, short enough it still releases clean). HOLDING space is the sustained e-brake.
-    if(e.code==='KeyN')night=!night; if(e.code==='KeyW')wet=!wet; if(e.code==='KeyT')assist=!assist; if(e.code==='KeyL'){gfxTier++;applyGfx();} if(e.code==='KeyJ')skipTrack(); if(e.code==='KeyP')togglePause(); if(e.code==='KeyM')toggleMute(); if(e.code==='KeyB')toggleMusic(); if(e.code==='KeyH'){ copsOn=!copsOn; if(!copsOn){cops=[];heat=0;heatStars=0;escapeT=0;} } if(e.code==='KeyC')cycleCam(); });
+    if(e.code==='Space' && !e.repeat && car && !MANUAL)car.driftHold=Math.max(car.driftHold||0,0.42);   // tap-grace (AUTO scheme only — under MANUAL a space tap is a throttle blip, not a drift request): a last-second STAB into a corner reliably catches a slide. HOLDING space is the sustained e-brake.
+    if(e.code==='KeyN')night=!night; if(e.code==='KeyW')wet=!wet; if(e.code==='KeyT')assist=!assist; if(e.code==='KeyL'){gfxTier++;applyGfx();} if(e.code==='KeyJ')skipTrack(); if(e.code==='KeyP')togglePause(); if(e.code==='KeyM')toggleMute(); if(e.code==='KeyB')toggleMusic(); if(e.code==='KeyH'){ copsOn=!copsOn; if(!copsOn){cops=[];heat=0;heatStars=0;escapeT=0;} } if(e.code==='KeyC')cycleCam(); if(e.code==='KeyG')toggleCtrl();
+  });
   window.addEventListener('keyup',e=>{ keys[e.code]=false; });
   const T={left:false,right:false,drift:false,boost:false,brake:false,steerAxis:0,joy:false};
   // SCHEME: SPACE = drift (hold, manual · full control) · SHIFT = burn M24.9e boost · ↓/S = brake. (accelerator is automatic)
-  function readKeys(){ K.left=keys['ArrowLeft']||keys['KeyA']||T.left; K.right=keys['ArrowRight']||keys['KeyD']||T.right; K.drift=keys['Space']||T.drift; K.boost=keys['ShiftLeft']||keys['ShiftRight']||T.boost; K.brake=keys['ArrowDown']||keys['KeyS']||T.brake; }
+  function readKeys(){ K.left=keys['ArrowLeft']||keys['KeyA']||T.left; K.right=keys['ArrowRight']||keys['KeyD']||T.right; K.boost=keys['ShiftLeft']||keys['ShiftRight']||T.boost; K.brake=keys['ArrowDown']||keys['KeyS']||T.brake;
+    // Edge-detect the throttle here rather than in the key handler so the on-screen touch button double-taps too.
+    const gasHeld=keys['Space']||T.drift;
+    if(MANUAL){
+      // DRIFT ENTRY = a quick BLIP off and back onto the throttle, then keep holding.
+      // Literally "double tap and hold", but measured as the length of the GAP rather than counting presses —
+      // because in practice you enter a corner already on the gas, so requiring two fresh taps would mean
+      // release-tap-release-tap, three motions deep, mid-corner. Measuring the off-time makes it one flick of the
+      // thumb from wherever you already are, and it mirrors the real lift-off that unsettles a car into a slide.
+      const t=performance.now();
+      if(gasHeld&&!_gasPrev&&_lastGasDown>0&&t-_lastGasUp<260)_driftLatch=true;
+      if(gasHeld&&!_gasPrev)_lastGasDown=t;
+      if(!gasHeld&&_gasPrev)_lastGasUp=t;
+      if(!gasHeld)_driftLatch=false;                       // let go and the slide settles out with the throttle
+      K.gas=gasHeld; K.drift=_driftLatch&&gasHeld;
+    } else { K.gas=true; K.drift=gasHeld; }
+    if(DEMO){ K.gas=true; K.drift=T.drift; }               // attract-mode autopilot always has its foot in
+    _gasPrev=gasHeld; }
   function bindTouch(id,prop){ const el=document.getElementById(id); const on=e=>{e.preventDefault();T[prop]=true;},off=e=>{e.preventDefault();T[prop]=false;};
     el.addEventListener('touchstart',on,{passive:false}); el.addEventListener('touchend',off,{passive:false}); el.addEventListener('touchcancel',off,{passive:false}); el.addEventListener('mousedown',on); el.addEventListener('mouseup',off); el.addEventListener('mouseleave',off); }
   bindTouch('tDrift','drift');bindTouch('tBoost','boost');bindTouch('tBrake','brake');
@@ -629,6 +708,10 @@
     T.drift=_botDrift; const now=performance.now();
     if(!T.drift && corner<0.14 && car.m>40 && car.boostT<=0 && now-_botBoostT>1500){ T.boost=true; _botBoostT=now; setTimeout(()=>{ T.boost=false; },110); } }
   function step(dt){
+    // CHASE-CAM HEADING — eased toward the direction the car is actually TRAVELLING (body angle when nearly stopped).
+    { const _sp=Math.hypot(car.vx,car.vy), tgt=_sp>60?Math.atan2(car.vy,car.vx):car.a;
+      let d=tgt-camAng; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI;
+      camAng+=d*Math.min(1,dt*4.0); }
     if(DEMO){ const manual=keys['ArrowLeft']||keys['ArrowRight']||keys['KeyA']||keys['KeyD']||keys['Space']||keys['ShiftLeft']||keys['ShiftRight']||keys['ArrowDown']||keys['KeyS']||T.joy;
       if(manual)manualUntil=performance.now()+1500;                                   // touch the controls → you take the wheel
       if(performance.now()>manualUntil)botDrive(); else { T.left=T.right=T.drift=T.boost=T.brake=false; }   // autopilot yields while you drive, resumes after ~1.5s idle
@@ -660,7 +743,9 @@
     const targetTop=(car.boostT>0?BOOST_MAX:MAXSPD)*((car.hyperT||0)>0?1.28:1)*sMul.top(PC)*momo*curSpd*UMUL.top;   // *UMUL.top = Top Speed upgrade   // curSpd = difficulty speed-scale; hyperT (from a boost capsule) pushes past even the boost cap
     const launchMul=1+Math.max(0,1-Math.max(0,vF)/360)*0.72;        // punchier off-line kick — standing starts / corner exits pull HARD, no more sluggish crawl
     const accel=(car.boostT>0?1500:1180)*launchMul*sMul.acc(PC);   // gentler accel curve (~18% down from 1800/1440) so slower reflexes can catch corner exits
-    if(K.brake){ vF-=1500*dt; if(vF<-240)vF=-240; } else vF+=accel*dt;
+    if(K.brake){ vF-=1500*dt; if(vF<-240)vF=-240; }
+    else if(K.gas){ vF+=accel*dt; }
+    else if(vF>0){ vF=Math.max(0,vF-330*dt); }   // MANUAL: lifting off coasts down on engine braking rather than holding speed
     vF*=0.997; if(vF>targetTop)vF=targetTop; if(vF<-240)vF=-240;   // even LESS drag (0.992→0.996→0.997) → holds top-end on the straights where the INSANE pack pulls away; top speed still clamped by targetTop
 
     const speedFactor=Math.min(1,spd/210), driftAuth=car.drifting?1.65:1.0; let steer=0; if(K.left)steer-=1; if(K.right)steer+=1;   // driftAuth = extra rotation while HOLDING space → the e-brake pivots into the corner, but SMOOTHLY (was 2.1 = too sharp/snappy). Still throws the tail; just more natural.
@@ -702,7 +787,18 @@
     const _accG=Math.max(-1,Math.min(1,(spd-(car._lastSpd||spd))/Math.max(dt,0.001)/1100)); car._lastSpd=spd;
     const _pitchT=K.brake?1:(-_accG*0.9); car.pitch=(car.pitch||0)+(_pitchT-(car.pitch||0))*Math.min(1,dt*7);
 
-    if(car.drifting&&spd>170){ const rx1=car.x-fx*26,ry1=car.y-fy*26; skid.push({x:rx1+rx*13,y:ry1+ry*13,a:0.5}); skid.push({x:rx1-rx*13,y:ry1-ry*13,a:0.5}); if(skid.length>560)skid.splice(0,skid.length-560); }
+    // TYRE MARKS — each blob now records the direction the rubber was laid in, so the 3D view can draw them as
+    // oriented streaks on the tarmac instead of round dots. Also laid under hard braking, not only drifts.
+    // Emitted by DISTANCE TRAVELLED, not once per frame. At 60fps a frame-based emitter lays ~120 marks a second,
+    // which is hundreds of clipped polygons to re-project every frame for a trail that already overlaps itself many
+    // times over. Every ~11 units still overlaps (each mark is 38 long) so the streak stays unbroken.
+    { const hardBrake=K.brake&&spd>170, laying=(car.drifting&&spd>120)||hardBrake||(spd>150&&Math.abs(vR)>150);
+      car._skidD=(car._skidD||0)+spd*dt;
+      if(laying&&car._skidD>11){ car._skidD=0;
+        const rx1=car.x-fx*26, ry1=car.y-fy*26, hd=Math.atan2(car.vy,car.vx), al=hardBrake&&!car.drifting?0.5:0.78;
+        skid.push({x:rx1+rx*13,y:ry1+ry*13,a:al,h:hd}); skid.push({x:rx1-rx*13,y:ry1-ry*13,a:al,h:hd});
+        if(skid.length>420)skid.splice(0,skid.length-420); }
+      else if(!laying)car._skidD=Math.min(car._skidD,11); }
     const turning=(K.left||K.right)&&spd>40;                            // burning rubber on EVERY turn, fast or slow
     const hardCorner=turning && spd>150 && Math.abs(vR)>72;             // louder when cornering hard
     screechUpdate(car.drifting||hardCorner, Math.abs(vR)+(hardCorner?120:0));   // ONLY on real slides (e-brake drift or hard high-speed slip) — no more screech on every little turn
@@ -967,53 +1063,134 @@
   // soft PS3 contact shadow — radial-gradient blob (much softer than a flat ellipse)
   function softShadow(cx,cy,rx,ry,al){ const g=ctx.createRadialGradient(cx,cy,0,cx,cy,Math.max(rx,ry)); g.addColorStop(0,'rgba(0,0,0,'+al+')'); g.addColorStop(0.6,'rgba(0,0,0,'+(al*0.55).toFixed(3)+')'); g.addColorStop(1,'rgba(0,0,0,0)'); ctx.save(); ctx.fillStyle=g; ctx.beginPath(); ctx.ellipse(cx,cy,rx,ry,0,0,7); ctx.fill(); ctx.restore(); }
   // ROADSIDE SPECTATORS — bobbing/waving crowd that pops off when you blitz past or drift by (FULL/PHOTO only)
+  // Every spectator used to cost ~10 separate canvas ops (shadow, legs, torso, head, hair, arms…). With a dozen
+  // stands on screen that ran into the thousands of draw calls a frame. The bodies are now BATCHED BY COLOUR —
+  // one path per colour per stand — and the hype glow is a pre-baked sprite rather than a fresh radial gradient.
+  const _cgx=[],_cyy=[],_csk=[],_cout=[],_chr=[],_cpose=[],_carm=[],_cph=[];
+  let _hypeGlow=null;
   function drawCrowd(){ if(lite||!crowd.length)return; const now=performance.now(), spd=Math.hypot(car.vx,car.vy);
     const oc=OUTFIT[TH().crowd]||OUTFIT.hood;
-    for(const cl of crowd){ const dx=cl.x-car.x,dy=cl.y-car.y,dd=dx*dx+dy*dy; if(dd>1200*1200)continue;
-      const hype=(dd<640*640 && (spd>280||car.drifting))?1:0;
+    if(!_hypeGlow){ _hypeGlow=document.createElement('canvas'); _hypeGlow.width=_hypeGlow.height=64; const g=_hypeGlow.getContext('2d');
+      const rg=g.createRadialGradient(32,32,0,32,32,32); rg.addColorStop(0,'rgba(201,168,76,0.55)'); rg.addColorStop(1,'rgba(201,168,76,0)'); g.fillStyle=rg; g.fillRect(0,0,64,64); }
+    for(const cl of crowd){ const half=cl.n*19*0.5+70; if(!inView(cl.x,cl.y,half))continue;
+      const dx=cl.x-CAMX,dy=cl.y-CAMY,dd=dx*dx+dy*dy;
+      const cdx=cl.x-car.x,cdy=cl.y-car.y;
+      const hype=((cdx*cdx+cdy*cdy)<640*640 && (spd>280||car.drifting))?1:0;
       ctx.save(); ctx.translate(cl.x,cl.y); ctx.rotate(cl.ang);
       const SPC=19, HALF=cl.n*SPC*0.5+9;
       ctx.fillStyle=night?'rgba(20,14,40,0.9)':'rgba(40,30,66,0.85)'; roundRect(-HALF,-22,HALF*2,36,6); ctx.fill();   // grandstand DECK
       ctx.strokeStyle=night?'rgba(76,224,224,.5)':'rgba(201,168,76,.6)'; ctx.lineWidth=2; roundRect(-HALF,-22,HALF*2,36,6); ctx.stroke();
-      if(hype){ ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=0.45+0.3*Math.sin(now*0.02); const gg=ctx.createRadialGradient(0,-6,0,0,-6,HALF); gg.addColorStop(0,'rgba(201,168,76,0.55)'); gg.addColorStop(1,'rgba(201,168,76,0)'); ctx.fillStyle=gg; ctx.fillRect(-HALF,-34,HALF*2,52); ctx.restore(); }   // hype glow
+      if(hype){ ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=0.45+0.3*Math.sin(now*0.02); ctx.drawImage(_hypeGlow,-HALF,-38,HALF*2,64); ctx.restore(); }   // hype glow (baked sprite)
       ctx.strokeStyle=night?'rgba(76,224,224,.55)':'rgba(201,168,76,.65)'; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(-HALF+2,-16); ctx.lineTo(HALF-2,-16); ctx.stroke();   // front rail
-      for(let s=0;s<cl.n;s++){ const seed=(s*7+((cl.ph*11)|0)), pose=seed%5;
+      // DISTANCE LOD — past ~460 units a spectator is a few pixels tall. Beyond that they become a bobbing row of
+      // coloured torsos + heads (two batched passes) instead of a full body rig, and the flag-bearers are dropped.
+      if(dd>(460*PERF_LOD)*(460*PERF_LOD)){
+        const N2=cl.n;
+        for(let oi=0;oi<oc.length;oi++){ let any=false; ctx.beginPath();
+          for(let s=0;s<N2;s++){ const seed=(s*7+((cl.ph*11)|0)); if((seed*3)%oc.length!==oi)continue; any=true;
+            const gx=(s-(N2-1)/2)*SPC+((s*7)%5-2), yy=-4+Math.sin(now*0.006+cl.ph+s*1.3)*2.0;
+            roundRect(gx-4.8,yy-1,9.6,11,3); }
+          if(any){ ctx.fillStyle=oc[oi]; ctx.fill(); } }
+        for(let si=0;si<SKIN.length;si++){ let any=false; ctx.beginPath();
+          for(let s=0;s<N2;s++){ const seed=(s*7+((cl.ph*11)|0)); if(seed%SKIN.length!==si)continue; any=true;
+            const gx=(s-(N2-1)/2)*SPC+((s*7)%5-2), yy=-4+Math.sin(now*0.006+cl.ph+s*1.3)*2.0;
+            ctx.moveTo(gx+4.6,yy-5); ctx.arc(gx,yy-5,4.6,0,7); }
+          if(any){ ctx.fillStyle=SKIN[si]; ctx.fill(); } }
+        ctx.restore(); continue; }
+      // pass 1 — resolve every spectator's pose/position/palette into flat scratch arrays (no per-body allocation)
+      const N=cl.n, egypt=(TH().crowd==='egypt');
+      for(let s=0;s<N;s++){ const seed=(s*7+((cl.ph*11)|0)), pose=seed%5;
         const jump=(hype&&(pose===0||pose===4))?Math.max(0,Math.sin(now*0.011+s*1.7))*5:0;
-        const bob=Math.sin(now*0.006+cl.ph+s*1.3)*2.0, gx=(s-(cl.n-1)/2)*SPC+((s*7)%5-2), yy=-4+bob-jump;
-        const sk=SKIN[seed%SKIN.length], out=oc[(seed*3)%oc.length], hr=HAIR[seed%HAIR.length], armUp=(hype?10:4)+jump*1.4, ph=Math.sin(now*0.013+s*2);
-        ctx.globalAlpha=0.30; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(gx,12,7,3,0,0,7); ctx.fill(); ctx.globalAlpha=1;   // ground shadow (deck floor)
-        ctx.strokeStyle=night?'#20242e':'#33383f'; ctx.lineWidth=2.4; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(gx-2.4,yy+8); ctx.lineTo(gx-2.8,yy+13); ctx.moveTo(gx+2.4,yy+8); ctx.lineTo(gx+2.8,yy+13); ctx.stroke();   // legs
-        ctx.fillStyle=out; roundRect(gx-4.8,yy-1,9.6,11,3); ctx.fill();                                  // torso (outfit)
-        if(TH().crowd==='egypt'){ ctx.strokeStyle='rgba(201,168,76,.85)'; ctx.lineWidth=1.4; ctx.beginPath(); ctx.moveTo(gx-4,yy+1); ctx.lineTo(gx+4,yy+8); ctx.stroke(); }   // gold sash
-        ctx.fillStyle=sk; ctx.beginPath(); ctx.arc(gx,yy-5,4.6,0,7); ctx.fill();                          // head
-        ctx.fillStyle=hr; ctx.beginPath(); ctx.arc(gx,yy-6.2,4.6,Math.PI*1.02,Math.PI*1.98); ctx.fill();  // hair cap
-        ctx.strokeStyle=sk; ctx.lineWidth=2.4; ctx.lineCap='round';
-        if(pose===0){ ctx.beginPath(); ctx.moveTo(gx-3.4,yy+1); ctx.lineTo(gx-6-ph*1.6,yy-6-armUp); ctx.moveTo(gx+3.4,yy+1); ctx.lineTo(gx+6+ph*1.6,yy-6-armUp); ctx.stroke(); }   // WAVE both arms
-        else if(pose===1){ ctx.beginPath(); ctx.moveTo(gx+3.2,yy+1); ctx.lineTo(gx+5,yy-7-armUp*0.6); ctx.stroke();
-          ctx.fillStyle=night?'#20242e':'#2a2e38'; roundRect(gx+3.2,yy-12-armUp*0.6,4.4,6.4,1); ctx.fill(); ctx.fillStyle=night?'#eafcff':'#7fd0ff'; ctx.fillRect(gx+4,yy-11-armUp*0.6,2.8,4.4); }   // PHONE filming (glowing screen)
-        else if(pose===2){ ctx.beginPath(); ctx.moveTo(gx-2,yy+1); ctx.lineTo(gx-2,yy-9-armUp*0.5); ctx.moveTo(gx+2,yy+1); ctx.lineTo(gx+2,yy-9-armUp*0.5); ctx.stroke();
-          ctx.fillStyle='#f4ece0'; roundRect(gx-7,yy-17-armUp*0.5,14,7.5,1.5); ctx.fill(); ctx.fillStyle=CHEER[seed%CHEER.length]; ctx.fillRect(gx-5.5,yy-15.5-armUp*0.5,11,4.5); }   // SIGN placard
-        else if(pose===3){ ctx.beginPath(); ctx.moveTo(gx+3,yy+1); ctx.lineTo(gx+5,yy-10-armUp*0.7); ctx.stroke();
-          ctx.strokeStyle='#5a4a30'; ctx.lineWidth=1.4; ctx.beginPath(); ctx.moveTo(gx+5,yy-11-armUp*0.7); ctx.lineTo(gx+5,yy-2); ctx.stroke();
-          ctx.fillStyle=CHEER[(seed*2)%CHEER.length]; ctx.beginPath(); ctx.moveTo(gx+5,yy-11-armUp*0.7); ctx.lineTo(gx+12+ph*2.4,yy-9.5-armUp*0.7); ctx.lineTo(gx+5,yy-6-armUp*0.7); ctx.closePath(); ctx.fill(); }   // FLAG waving
-        else { ctx.beginPath(); ctx.moveTo(gx-3.4,yy+1); ctx.lineTo(gx-5,yy-8-armUp); ctx.moveTo(gx+3.4,yy+1); ctx.lineTo(gx+5,yy-8-armUp); ctx.stroke(); } }   // CHEER pump both arms
+        _cgx[s]=(s-(N-1)/2)*SPC+((s*7)%5-2);
+        _cyy[s]=-4+Math.sin(now*0.006+cl.ph+s*1.3)*2.0-jump;
+        _csk[s]=seed%SKIN.length; _cout[s]=(seed*3)%oc.length; _chr[s]=seed%HAIR.length;
+        _cpose[s]=pose; _carm[s]=(hype?10:4)+jump*1.4; _cph[s]=Math.sin(now*0.013+s*2); }
+      // pass 2 — emit ONE path per colour instead of ~10 draw calls per body
+      ctx.globalAlpha=0.30; ctx.fillStyle='#000'; ctx.beginPath();
+      for(let s=0;s<N;s++)ctx.ellipse(_cgx[s],12,7,3,0,0,7); ctx.fill(); ctx.globalAlpha=1;   // deck-floor shadows
+      ctx.strokeStyle=night?'#20242e':'#33383f'; ctx.lineWidth=2.4; ctx.lineCap='round'; ctx.beginPath();
+      for(let s=0;s<N;s++){ const gx=_cgx[s],yy=_cyy[s]; ctx.moveTo(gx-2.4,yy+8); ctx.lineTo(gx-2.8,yy+13); ctx.moveTo(gx+2.4,yy+8); ctx.lineTo(gx+2.8,yy+13); } ctx.stroke();   // legs
+      for(let oi=0;oi<oc.length;oi++){ let any=false; ctx.beginPath();
+        for(let s=0;s<N;s++){ if(_cout[s]!==oi)continue; any=true; roundRect(_cgx[s]-4.8,_cyy[s]-1,9.6,11,3); }
+        if(any){ ctx.fillStyle=oc[oi]; ctx.fill(); } }                                        // torsos, grouped by outfit
+      if(egypt){ ctx.strokeStyle='rgba(201,168,76,.85)'; ctx.lineWidth=1.4; ctx.beginPath();
+        for(let s=0;s<N;s++){ ctx.moveTo(_cgx[s]-4,_cyy[s]+1); ctx.lineTo(_cgx[s]+4,_cyy[s]+8); } ctx.stroke(); }   // gold sashes
+      for(let si=0;si<SKIN.length;si++){ let any=false; ctx.beginPath();
+        for(let s=0;s<N;s++){ if(_csk[s]!==si)continue; any=true; ctx.moveTo(_cgx[s]+4.6,_cyy[s]-5); ctx.arc(_cgx[s],_cyy[s]-5,4.6,0,7); }
+        if(any){ ctx.fillStyle=SKIN[si]; ctx.fill(); } }                                      // heads, grouped by skin tone
+      for(let hi=0;hi<HAIR.length;hi++){ let any=false; ctx.beginPath();
+        for(let s=0;s<N;s++){ if(_chr[s]!==hi)continue; any=true; ctx.moveTo(_cgx[s]+4.6*Math.cos(Math.PI*1.02),_cyy[s]-6.2+4.6*Math.sin(Math.PI*1.02)); ctx.arc(_cgx[s],_cyy[s]-6.2,4.6,Math.PI*1.02,Math.PI*1.98); }
+        if(any){ ctx.fillStyle=HAIR[hi]; ctx.fill(); } }                                      // hair caps, grouped by tone
+      ctx.lineWidth=2.4; ctx.lineCap='round';
+      for(let si=0;si<SKIN.length;si++){ let any=false; ctx.beginPath();                      // ARMS, grouped by skin tone
+        for(let s=0;s<N;s++){ if(_csk[s]!==si)continue; const gx=_cgx[s],yy=_cyy[s],pose=_cpose[s],armUp=_carm[s],ph=_cph[s]; any=true;
+          if(pose===0){ ctx.moveTo(gx-3.4,yy+1); ctx.lineTo(gx-6-ph*1.6,yy-6-armUp); ctx.moveTo(gx+3.4,yy+1); ctx.lineTo(gx+6+ph*1.6,yy-6-armUp); }         // WAVE both arms
+          else if(pose===1){ ctx.moveTo(gx+3.2,yy+1); ctx.lineTo(gx+5,yy-7-armUp*0.6); }                                                                     // PHONE arm
+          else if(pose===2){ ctx.moveTo(gx-2,yy+1); ctx.lineTo(gx-2,yy-9-armUp*0.5); ctx.moveTo(gx+2,yy+1); ctx.lineTo(gx+2,yy-9-armUp*0.5); }               // SIGN arms
+          else if(pose===3){ ctx.moveTo(gx+3,yy+1); ctx.lineTo(gx+5,yy-10-armUp*0.7); }                                                                      // FLAG arm
+          else { ctx.moveTo(gx-3.4,yy+1); ctx.lineTo(gx-5,yy-8-armUp); ctx.moveTo(gx+3.4,yy+1); ctx.lineTo(gx+5,yy-8-armUp); } }                             // CHEER pump
+        if(any){ ctx.strokeStyle=SKIN[si]; ctx.stroke(); } }
+      // pass 3 — the props each pose carries (only ~3 in 5 spectators have one)
+      for(let s=0;s<N;s++){ const gx=_cgx[s],yy=_cyy[s],pose=_cpose[s],armUp=_carm[s],ph=_cph[s], seed=(s*7+((cl.ph*11)|0));
+        if(pose===1){ ctx.fillStyle=night?'#20242e':'#2a2e38'; roundRect(gx+3.2,yy-12-armUp*0.6,4.4,6.4,1); ctx.fill(); ctx.fillStyle=night?'#eafcff':'#7fd0ff'; ctx.fillRect(gx+4,yy-11-armUp*0.6,2.8,4.4); }   // PHONE filming
+        else if(pose===2){ ctx.fillStyle='#f4ece0'; roundRect(gx-7,yy-17-armUp*0.5,14,7.5,1.5); ctx.fill(); ctx.fillStyle=CHEER[seed%CHEER.length]; ctx.fillRect(gx-5.5,yy-15.5-armUp*0.5,11,4.5); }            // SIGN placard
+        else if(pose===3){ ctx.strokeStyle='#5a4a30'; ctx.lineWidth=1.4; ctx.beginPath(); ctx.moveTo(gx+5,yy-11-armUp*0.7); ctx.lineTo(gx+5,yy-2); ctx.stroke();
+          ctx.fillStyle=CHEER[(seed*2)%CHEER.length]; ctx.beginPath(); ctx.moveTo(gx+5,yy-11-armUp*0.7); ctx.lineTo(gx+12+ph*2.4,yy-9.5-armUp*0.7); ctx.lineTo(gx+5,yy-6-armUp*0.7); ctx.closePath(); ctx.fill(); } }   // FLAG waving
       // PROMINENT FLAG-WAVERS at each end of the stand — big RIPPLING flags (checkered marshals near the start/finish, QMM gold/cyan fans elsewhere)
       for(const end of [-1,1]){ const bx=end*(HALF-6), sway=Math.sin(now*0.005+cl.ph+end*1.3)*5.5, pyTop=-54;
         ctx.fillStyle=SKIN[((cl.ph*2|0)+(end<0?1:3))%SKIN.length]; ctx.beginPath(); ctx.arc(bx,-6,4.8,0,7); ctx.fill();                              // bearer head
         ctx.fillStyle=cl.hot?'#c9a84c':CHEER[((((cl.ph|0)+end+2)%CHEER.length)+CHEER.length)%CHEER.length]; roundRect(bx-4.8,-3,9.6,13,2.5); ctx.fill();  // bearer body
         ctx.strokeStyle='#3a3a42'; ctx.lineWidth=3; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(bx,-2); ctx.lineTo(bx+sway,pyTop); ctx.stroke();  // tall pole
         ctx.save(); ctx.translate(bx+sway,pyTop); const segs=8, flen=56*end, fh=30;                                                               // BIG waving flag streaming off the pole top
-        for(let s=0;s<segs;s++){ const x0=flen*s/segs, x1=flen*(s+1)/segs, wob=13*s/segs, y0=Math.sin(now*0.009+cl.ph+s*0.8)*wob, y1=Math.sin(now*0.009+cl.ph+(s+1)*0.8)*wob;
-          ctx.fillStyle = cl.hot ? ((s%2)?'#f4f4f4':'#141414') : ((s%2)?(TH().crowd==='egypt'?'#caa25c':COL.cyan):COL.gold);
-          ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.lineTo(x1,y1+fh); ctx.lineTo(x0,y0+fh); ctx.closePath(); ctx.fill(); }
+        for(let par=0;par<2;par++){   // the flag only ever uses two alternating colours — two fills, not eight
+          ctx.beginPath();
+          for(let s=par;s<segs;s+=2){ const x0=flen*s/segs, x1=flen*(s+1)/segs, wob=13*s/segs, y0=Math.sin(now*0.009+cl.ph+s*0.8)*wob, y1=Math.sin(now*0.009+cl.ph+(s+1)*0.8)*wob;
+            ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.lineTo(x1,y1+fh); ctx.lineTo(x0,y0+fh); ctx.closePath(); }
+          ctx.fillStyle = cl.hot ? (par?'#f4f4f4':'#141414') : (par?(TH().crowd==='egypt'?'#caa25c':COL.cyan):COL.gold);
+          ctx.fill(); }
         ctx.restore(); }
       if(hype){ ctx.globalCompositeOperation='lighter'; for(let f=0;f<cl.n*2;f++){ ctx.globalAlpha=0.5+0.5*Math.sin(now*0.012+f*3); ctx.fillStyle=CHEER[f%CHEER.length]; const fx2=(f-cl.n)*9, fy2=-24-((now*0.05+f*40)%28); ctx.fillRect(fx2,fy2,3,3); } ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over'; }   // confetti
       ctx.restore(); }
   }
+  // ── STOREFRONT SIGN CACHE ──
+  // Sign boards used to be rebuilt every frame per building: measureText + two roundRects + a shadow-blurred fillText.
+  // Blurred text is one of the most expensive things you can ask a 2D canvas for, and it was happening ~40× a frame.
+  // Now each unique (name · theme · night · size) board is rasterised ONCE into a small canvas and blitted after.
+  const SIGNCACHE=new Map();
+  function signSprite(name,BST,accent,fs,maxW){
+    const key=name+'|'+BST+'|'+(BST==='neon'?accent:'-')+'|'+(night?1:0)+'|'+fs;
+    let s=SIGNCACHE.get(key); if(s)return s;
+    const SS=2, pad=9;   // bake at 2× so the board stays crisp when the camera pushes in
+    const m=document.createElement('canvas'), g=m.getContext('2d');
+    g.font='900 '+fs+'px Trebuchet MS';
+    const tw=Math.min(maxW, g.measureText(name).width+14), th=fs+7;
+    m.width=Math.ceil((tw+pad*2)*SS); m.height=Math.ceil((th+pad*2)*SS);
+    g.setTransform(SS,0,0,SS,pad*SS,pad*SS);
+    g.font='900 '+fs+'px Trebuchet MS'; g.textAlign='center'; g.textBaseline='middle';
+    let bF,bS,tC,glow=false;
+    if(BST==='stone'){ bF=night?'rgba(58,42,22,.88)':'#d8ba7e'; bS=night?'#c2a066':'#8a6a3a'; tC=night?'#e8cf96':'#4a3418'; }
+    else if(BST==='paint'){ bF=night?'rgba(28,30,40,.88)':'#f4f0e6'; bS=night?'#9fb0c4':'#3a3a44'; tC=night?'#f0f0f0':'#2a2a34'; }
+    else { bF='rgba(8,6,20,0.82)'; bS=accent; tC=night?accent:'#f4ecd8'; glow=night; }
+    const rr=(x,y,w,h,r)=>{ g.beginPath(); g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r); g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath(); };
+    g.globalAlpha=night?0.97:0.9; g.fillStyle=bF; rr(0,0,tw,th,4); g.fill();
+    g.strokeStyle=bS; g.lineWidth=1.5; rr(0,0,tw,th,4); g.stroke();
+    g.globalAlpha=1; g.fillStyle=tC; if(glow){ g.shadowColor=accent; g.shadowBlur=7; } g.fillText(name,tw/2,th/2); g.shadowBlur=0;
+    s={cv:m, w:tw+pad*2, h:th+pad*2};
+    if(SIGNCACHE.size>260)SIGNCACHE.clear();   // a theme/night flip invalidates the lot; cheapest fix is to start over
+    SIGNCACHE.set(key,s); return s;
+  }
+  // window-colour batching buckets — reused every frame so the hot loop allocates nothing
+  const _wq=[[],[],[],[],[]];
+  const _vis=[];
   function drawProps(){ const now=performance.now(); const bs=BSTYLE[TH().build]||BSTYLE.neon, WALL=night?bs.nWall:bs.wall, PARA=night?bs.nParapet:bs.parapet, BST=bs.sign;
-    const vis=[]; for(const b of props){ const dx=b.x-car.x, dy=b.y-car.y; if(Math.abs(dx)>1220||Math.abs(dy)>920)continue; vis.push({b,dx,dy,d:dx*dx+dy*dy}); }
-    vis.sort((A,B)=>B.d-A.d);
-    for(const v of vis){ const b=v.b, k=b.h3d/CAM3D, ox=v.dx*k, oy=v.dy*k, tp=b.taper||1;
+    // Cull against the REAL camera rect. The old ±1220/±920 box covered ~5× the on-screen area, so four out of every
+    // five buildings were fully extruded, windowed and signed for pixels that were never going to be shown.
+    _vis.length=0;
+    // Parallax is measured from the SCREEN CENTRE (CAMX/CAMY), not the car — under the chase camera the car sits low
+    // in frame, so keying the fake-3D lean to the car made buildings splay from the wrong vanishing point.
+    for(const b of props){ const half=(b.w+b.h)*0.5; if(!inView(b.x,b.y,half))continue; const dx=b.x-CAMX, dy=b.y-CAMY; _vis.push({b,dx,dy,d:dx*dx+dy*dy}); }
+    _vis.sort((A,B)=>B.d-A.d);
+    for(const v of _vis){ const b=v.b, k=b.h3d/CAM3D, ox=v.dx*k, oy=v.dy*k, tp=b.taper||1;
       const ca=Math.cos(b.a),sa=Math.sin(b.a),hw=b.w/2,hh=b.h/2;
       const cor=[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]].map(p=>({x:b.x+p[0]*ca-p[1]*sa, y:b.y+p[0]*sa+p[1]*ca}));
       const roof=cor.map(c=>({x:b.x+(c.x-b.x)*tp+ox, y:b.y+(c.y-b.y)*tp+oy}));   // tapered + raised roof (setback = less boxy)
@@ -1023,22 +1200,44 @@
         ctx.strokeStyle=PARA; ctx.lineWidth=2; ctx.stroke();
         continue;
       }
+      // DISTANCE LOD. A building far up the street resolves to a handful of pixels of facade, so the AO bands, window
+      // grid, sign board and trim ring are all invisible detail being rasterised at full price. Three tiers: NEAR gets
+      // everything, MID drops the sign/trim/rooftop clutter, FAR is just walls, roof and the bright parapet lip.
+      const _nr=430*PERF_LOD, _mr=640*PERF_LOD, near=v.d<_nr*_nr, midLOD=v.d<_mr*_mr;
       // ground shadow
       ctx.globalAlpha=0.4; ctx.fillStyle='#000'; ctx.beginPath(); cor.forEach((c,e)=>e?ctx.lineTo(c.x,c.y):ctx.moveTo(c.x,c.y)); ctx.closePath(); ctx.fill(); ctx.globalAlpha=1;
       const offLen=Math.hypot(ox,oy)||1, odx=ox/offLen, ody=oy/offLen;
       for(let e=0;e<4;e++){ const c1=cor[e],c2=cor[(e+1)%4], r1=roof[e], r2=roof[(e+1)%4];
-        // wall with grounded AO gradient (dark at street → lighter up top)
-        ctx.fillStyle=WALL[b.hue%WALL.length];   // themed wall base (neon / sandstone / victorian pastel)
+        // wall base colour (neon / sandstone / victorian pastel)
+        ctx.fillStyle=WALL[b.hue%WALL.length];
         ctx.beginPath(); ctx.moveTo(c1.x,c1.y);ctx.lineTo(c2.x,c2.y);ctx.lineTo(r2.x,r2.y);ctx.lineTo(r1.x,r1.y);ctx.closePath(); ctx.fill();
-        const wg=ctx.createLinearGradient((c1.x+c2.x)/2,(c1.y+c2.y)/2,(r1.x+r2.x)/2,(r1.y+r2.y)/2); wg.addColorStop(0,'rgba(0,0,0,.42)'); wg.addColorStop(.55,'rgba(0,0,0,.10)'); wg.addColorStop(1,'rgba(255,255,255,.07)'); ctx.fillStyle=wg; ctx.fill();   // AO depth: dark at street → light at the roof lip (kills the flat-box look)
+        // AO depth (dark at street → light at the roof lip) as two flat bands instead of a fresh linear gradient.
+        // Building a gradient object per wall meant ~200 shader-backed gradients a frame purely to shade boxes.
+        if(midLOD){
+          const bx1=c1.x+(r1.x-c1.x)*0.58, by1=c1.y+(r1.y-c1.y)*0.58, bx2=c2.x+(r2.x-c2.x)*0.58, by2=c2.y+(r2.y-c2.y)*0.58;
+          ctx.fillStyle='rgba(0,0,0,.30)'; ctx.beginPath(); ctx.moveTo(c1.x,c1.y);ctx.lineTo(c2.x,c2.y);ctx.lineTo(bx2,by2);ctx.lineTo(bx1,by1);ctx.closePath(); ctx.fill();
+          const tx1=c1.x+(r1.x-c1.x)*0.84, ty1=c1.y+(r1.y-c1.y)*0.84, tx2=c2.x+(r2.x-c2.x)*0.84, ty2=c2.y+(r2.y-c2.y)*0.84;
+          ctx.fillStyle='rgba(255,255,255,.07)'; ctx.beginPath(); ctx.moveTo(tx1,ty1);ctx.lineTo(tx2,ty2);ctx.lineTo(r2.x,r2.y);ctx.lineTo(r1.x,r1.y);ctx.closePath(); ctx.fill(); }
         // windowed FACADE on the faces we see well (edge roughly perpendicular to the extrusion)
         const ex=c2.x-c1.x, ey=c2.y-c1.y, el=Math.hypot(ex,ey)||1, dotp=Math.abs((ex/el)*odx+(ey/el)*ody);
-        if(dotp<0.74 && offLen>14 && v.d<1000*1000){ const bil=(s,t)=>{ const bx=c1.x+ex*s, by=c1.y+ey*s, tx=r1.x+(r2.x-r1.x)*s, ty=r1.y+(r2.y-r1.y)*s; return {x:bx+(tx-bx)*t, y:by+(ty-by)*t}; };
-          const floors=Math.max(3,Math.min(7,Math.round(offLen/15))), cols=Math.max(2,Math.min(5,Math.round(el/22))), seed=(b.w*3+b.h)|0;
+        if(dotp<0.74 && offLen>14 && midLOD){
+          // WINDOW BATCHING: every window used to be its own fillStyle assignment + path + fill — up to 35 per wall,
+          // 140 per building, several thousand a frame. There are only 5 distinct window colours, so bucket the quads
+          // by colour and emit 5 fills per wall instead. Identical output, ~7× fewer draw calls.
+          const floors=Math.max(3,Math.min(near?7:4,Math.round(offLen/15))), cols=Math.max(2,Math.min(near?5:3,Math.round(el/22))), seed=(b.w*3+b.h)|0;
+          for(let q=0;q<5;q++)_wq[q].length=0;
           for(let f=0;f<floors;f++){ const t0=(f+0.24)/floors,t1=(f+0.76)/floors;
-            for(let c=0;c<cols;c++){ const s0=(c+0.2)/cols,s1=(c+0.8)/cols, q=(f*7+c*13+seed)%5;
-              ctx.fillStyle = (BST==='neon')?(night?(q===0?'rgba(255,216,146,.98)':q===1?'rgba(255,216,146,.64)':q===2?'rgba(76,224,224,.55)':q===3?'rgba(232,120,200,.42)':'rgba(8,6,20,.5)'):(q<3?'rgba(190,212,255,.46)':'rgba(0,0,0,.26)')):(night?(q<2?bs.nWin:'rgba(12,8,5,.5)'):(q<3?bs.win:'rgba(0,0,0,.26)'));
-              const A=bil(s0,t0),B=bil(s1,t0),C=bil(s1,t1),D=bil(s0,t1); ctx.beginPath(); ctx.moveTo(A.x,A.y);ctx.lineTo(B.x,B.y);ctx.lineTo(C.x,C.y);ctx.lineTo(D.x,D.y);ctx.closePath(); ctx.fill(); } } }
+            for(let c=0;c<cols;c++){ const s0=(c+0.2)/cols,s1=(c+0.8)/cols, q=(f*7+c*13+seed)%5, a=_wq[q];
+              // bilinear corner of the wall quad, inlined so the hot loop allocates no objects
+              const b0x=c1.x+ex*s0, b0y=c1.y+ey*s0, t0x=r1.x+(r2.x-r1.x)*s0, t0y=r1.y+(r2.y-r1.y)*s0;
+              const b1x=c1.x+ex*s1, b1y=c1.y+ey*s1, t1x=r1.x+(r2.x-r1.x)*s1, t1y=r1.y+(r2.y-r1.y)*s1;
+              a.push(b0x+(t0x-b0x)*t0, b0y+(t0y-b0y)*t0,  b1x+(t1x-b1x)*t0, b1y+(t1y-b1y)*t0,
+                     b1x+(t1x-b1x)*t1, b1y+(t1y-b1y)*t1,  b0x+(t0x-b0x)*t1, b0y+(t0y-b0y)*t1); } }
+          for(let q=0;q<5;q++){ const a=_wq[q]; if(!a.length)continue;
+            ctx.fillStyle = (BST==='neon')?(night?(q===0?'rgba(255,216,146,.98)':q===1?'rgba(255,216,146,.64)':q===2?'rgba(76,224,224,.55)':q===3?'rgba(232,120,200,.42)':'rgba(8,6,20,.5)'):(q<3?'rgba(190,212,255,.46)':'rgba(0,0,0,.26)')):(night?(q<2?bs.nWin:'rgba(12,8,5,.5)'):(q<3?bs.win:'rgba(0,0,0,.26)'));
+            ctx.beginPath();
+            for(let i=0;i<a.length;i+=8){ ctx.moveTo(a[i],a[i+1]); ctx.lineTo(a[i+2],a[i+3]); ctx.lineTo(a[i+4],a[i+5]); ctx.lineTo(a[i+6],a[i+7]); ctx.closePath(); }
+            ctx.fill(); } }
         // parapet edge (bright roof lip)
         ctx.strokeStyle=PARA; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(r1.x,r1.y); ctx.lineTo(r2.x,r2.y); ctx.stroke(); }
       // ROOF (tapered, raised, ROUNDED corners for a soft PS3 read — not a hard Nintendo box)
@@ -1057,21 +1256,15 @@
         else { ctx.strokeStyle='rgba(120,90,50,.35)'; ctx.lineWidth=1; roundRect(-rw*0.34,-rh*0.34,rw*0.68,rh*0.68,rr*0.6); ctx.stroke(); } }
       // ROUNDED CORNICE rim-light + accent trim + a little rooftop unit = drip / depth
       ctx.strokeStyle=PARA; ctx.lineWidth=2.6; ctx.lineJoin='round'; roundRect(-rw/2,-rh/2,rw,rh,rr); ctx.stroke();
-      ctx.globalAlpha=0.55; ctx.strokeStyle=BST==='neon'?SIGNCOL[b.hue%4]:(BST==='stone'?'rgba(201,168,76,.7)':'rgba(255,255,255,.7)'); ctx.lineWidth=1.4; roundRect(-rw/2+4,-rh/2+4,rw-8,rh-8,Math.max(1,rr-3)); ctx.stroke(); ctx.globalAlpha=1;   // accent trim ring
-      if(!bs.roofImg && rw>62){ ctx.fillStyle=night?'rgba(255,255,255,.07)':'rgba(0,0,0,.10)'; roundRect(-rw*0.24,-rh*0.22,rw*0.22,rh*0.18,3); ctx.fill(); }   // rooftop AC/water unit
+      if(midLOD){ ctx.globalAlpha=0.55; ctx.strokeStyle=BST==='neon'?SIGNCOL[b.hue%4]:(BST==='stone'?'rgba(201,168,76,.7)':'rgba(255,255,255,.7)'); ctx.lineWidth=1.4; roundRect(-rw/2+4,-rh/2+4,rw-8,rh-8,Math.max(1,rr-3)); ctx.stroke(); ctx.globalAlpha=1; }   // accent trim ring
+      if(near && !bs.roofImg && rw>62){ ctx.fillStyle=night?'rgba(255,255,255,.07)':'rgba(0,0,0,.10)'; roundRect(-rw*0.24,-rh*0.22,rw*0.22,rh*0.18,3); ctx.fill(); }   // rooftop AC/water unit
       // rooftop NEON SIGN strip (some buildings) — no blur
-      if(BST==='neon' && ((b.w|0)%3)===0){ ctx.globalAlpha=night?0.9:0.5; ctx.fillStyle=SIGNCOL[b.hue%4]; ctx.fillRect(-hw*tp*0.55,-hh*tp*0.82,hw*tp*1.1,4); ctx.globalAlpha=1; }
+      if(midLOD && BST==='neon' && ((b.w|0)%3)===0){ ctx.globalAlpha=night?0.9:0.5; ctx.fillStyle=SIGNCOL[b.hue%4]; ctx.fillRect(-hw*tp*0.55,-hh*tp*0.82,hw*tp*1.1,4); ctx.globalAlpha=1; }
       // STOREFRONT SIGN — lit board with the (made-up) shop name
-      if(b.name && v.d<860*860){ const fs=Math.max(9,Math.min(19,b.w*tp*0.15)); ctx.font='900 '+fs+'px Trebuchet MS'; ctx.textAlign='center'; ctx.textBaseline='middle';
-        const tw=Math.min(b.w*tp*1.1, ctx.measureText(b.name).width+14), th=fs+7, sy=-hh*tp*0.5, sc=SIGNCOL[b.hue%4];
-        let bF,bS,tC,glow=false;   // sign board style per theme: neon glow / carved stone / painted
-        if(BST==='stone'){ bF=night?'rgba(58,42,22,.88)':'#d8ba7e'; bS=night?'#c2a066':'#8a6a3a'; tC=night?'#e8cf96':'#4a3418'; }
-        else if(BST==='paint'){ bF=night?'rgba(28,30,40,.88)':'#f4f0e6'; bS=night?'#9fb0c4':'#3a3a44'; tC=night?'#f0f0f0':'#2a2a34'; }
-        else { bF='rgba(8,6,20,0.82)'; bS=sc; tC=night?sc:'#f4ecd8'; glow=night; }
-        ctx.globalAlpha=night?0.97:0.9; ctx.fillStyle=bF; roundRect(-tw/2,sy-th/2,tw,th,4); ctx.fill();
-        ctx.strokeStyle=bS; ctx.lineWidth=1.5; roundRect(-tw/2,sy-th/2,tw,th,4); ctx.stroke();
-        ctx.fillStyle=tC; if(glow){ctx.shadowColor=sc;ctx.shadowBlur=7;} ctx.fillText(b.name,0,sy); ctx.shadowBlur=0;
-        ctx.textAlign='left'; ctx.textBaseline='alphabetic'; ctx.globalAlpha=1; }
+      if(b.name && near){   // one cached blit instead of measureText + 2 roundRects + blurred fillText per frame
+        const fs=Math.round(Math.max(9,Math.min(19,b.w*tp*0.15))), sy=-hh*tp*0.5;
+        const sp=signSprite(b.name,BST,SIGNCOL[b.hue%4],fs,Math.round(b.w*tp*1.1));
+        ctx.drawImage(sp.cv,-sp.w/2,sy-sp.h/2,sp.w,sp.h); }
       // blinking red antenna BEACON on taller buildings — no blur
       if(b.h3d>340 && night){ const blink=0.4+0.6*Math.abs(Math.sin(now*0.004+b.x*0.017)); ctx.globalAlpha=blink; ctx.fillStyle='#ff5b5b'; ctx.beginPath(); ctx.arc(hw*tp*0.32,-hh*tp*0.34,3.6,0,7); ctx.fill(); ctx.globalAlpha=1; }
       ctx.restore();
@@ -1079,7 +1272,7 @@
 
   const PUDCOL=[COL.cyan,COL.gold,'#9b6cff'];
   function drawPuddles(){ if(!wet||lite)return; const now=performance.now();
-    for(const pd of puddles){ const dx=pd.x-car.x,dy=pd.y-car.y; if(dx*dx+dy*dy>1500*1500)continue;
+    for(const pd of puddles){ if(!inView(pd.x,pd.y,pd.len+16))continue;
       const shim=0.5+0.5*Math.sin(now*0.003+pd.x*0.012);
       ctx.save(); ctx.translate(pd.x,pd.y); ctx.rotate(pd.ang);
       ctx.globalAlpha=0.75*shim; ctx.fillStyle=night?'rgba(70,110,160,0.5)':'rgba(100,132,172,0.4)'; ctx.beginPath(); ctx.ellipse(0,0,pd.len,pd.wid,0,0,7); ctx.fill();      // glossy wet base (flat, no gradient/blur)
@@ -1087,21 +1280,26 @@
       ctx.globalAlpha=Math.min(1,0.9*shim); ctx.fillStyle='rgba(255,255,255,.9)'; ctx.beginPath(); ctx.ellipse(pd.len*0.06,0,pd.len*0.32,pd.wid*0.13,0,0,7); ctx.fill();   // bright specular streak
       ctx.globalAlpha=1; ctx.restore();
     } }
+  // Preallocated kerb scratch. This used to build 442 fresh point objects EVERY frame (two sides × 221 points × base
+  // and top) — a steady allocation drip that the collector had to sweep up mid-race, which is exactly the kind of
+  // thing you feel as a periodic hitch. Same maths, zero garbage.
+  const _bX=new Float64Array(TN+2), _bY=new Float64Array(TN+2), _tX=new Float64Array(TN+2), _tY=new Float64Array(TN+2);
   function drawBorders(){ const now=performance.now(); const WK=0.055;   // rail height via parallax → track sits in a channel
     for(const side of [1,-1]){
-      const base=[], top=[];
-      for(let i=0;i<=(OPEN?TN-1:TN);i++){ const k=OPEN?i:i%TN,p=TRACK[k],n=NRM[k]; const bx=p.x+n.x*(ROAD_W*0.5)*side, by=p.y+n.y*(ROAD_W*0.5)*side; const dx=bx-car.x,dy=by-car.y; base.push({x:bx,y:by}); top.push({x:bx+dx*WK,y:by+dy*WK}); }
+      const CNT=(OPEN?TN:TN+1);
+      for(let i=0;i<CNT;i++){ const k=OPEN?i:i%TN,p=TRACK[k],n=NRM[k]; const bx=p.x+n.x*(ROAD_W*0.5)*side, by=p.y+n.y*(ROAD_W*0.5)*side; const dx=bx-CAMX,dy=by-CAMY;
+        _bX[i]=bx; _bY[i]=by; _tX[i]=bx+dx*WK; _tY[i]=by+dy*WK; }
       // 3D RAIL WALL (ground edge → raised edge)
-      ctx.beginPath(); base.forEach((b,i)=>i?ctx.lineTo(b.x,b.y):ctx.moveTo(b.x,b.y)); for(let i=top.length-1;i>=0;i--)ctx.lineTo(top[i].x,top[i].y); ctx.closePath();
+      ctx.beginPath(); for(let i=0;i<CNT;i++)i?ctx.lineTo(_bX[i],_bY[i]):ctx.moveTo(_bX[i],_bY[i]); for(let i=CNT-1;i>=0;i--)ctx.lineTo(_tX[i],_tY[i]); ctx.closePath();
       ctx.fillStyle=night?'rgba(9,15,30,0.92)':'rgba(26,18,44,0.9)'; ctx.fill();
       // kerb layers ride the RAISED top edge
-      const tp=()=>{ ctx.beginPath(); top.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); };
+      const tp=()=>{ ctx.beginPath(); for(let i=0;i<CNT;i++)i?ctx.lineTo(_tX[i],_tY[i]):ctx.moveTo(_tX[i],_tY[i]); };
       if(!lite){ ctx.lineWidth=22; ctx.strokeStyle=night?'rgba(76,224,224,.14)':'rgba(224,85,79,.16)'; tp(); ctx.stroke(); }   // soft glow (skip in lite)
       ctx.lineWidth=10; ctx.strokeStyle=night?'rgba(76,224,224,.92)':'#e0554f'; tp(); ctx.stroke();
       ctx.lineWidth=10; ctx.setLineDash([24,24]); ctx.lineDashOffset=-now*0.05*side; ctx.strokeStyle='rgba(255,255,255,.88)'; tp(); ctx.stroke(); ctx.setLineDash([]); ctx.lineDashOffset=0;
       if(!lite){ ctx.lineWidth=13; ctx.setLineDash([70,4400]); ctx.lineDashOffset=(-now*0.45*side)%4470; ctx.strokeStyle=night?'#ffffff':'#ffe4a0'; tp(); ctx.stroke(); ctx.setLineDash([]); ctx.lineDashOffset=0; }   // energy pulse (skip in lite)
       // gold accent on the ground edge (base of the rail)
-      ctx.lineWidth=2.5; ctx.strokeStyle=night?'rgba(201,168,76,.4)':'rgba(201,168,76,.5)'; ctx.beginPath(); base.forEach((b,i)=>i?ctx.lineTo(b.x,b.y):ctx.moveTo(b.x,b.y)); ctx.stroke();
+      ctx.lineWidth=2.5; ctx.strokeStyle=night?'rgba(201,168,76,.4)':'rgba(201,168,76,.5)'; ctx.beginPath(); for(let i=0;i<CNT;i++)i?ctx.lineTo(_bX[i],_bY[i]):ctx.moveTo(_bX[i],_bY[i]); ctx.stroke();
     } }
   // OVERPASS deck drawn on top of the self-crossing so it reads as a bridge over the lower road
   function drawBridge(){ const L=ROAD_W*1.7, Wd=ROAD_W+56;
@@ -1124,7 +1322,7 @@
     ctx.restore(); }
   // glowing hyper-boost capsules (drive through them)
   function drawBoosts(){ const now=performance.now();
-    for(const bp of boosts){ if(bp.cd>0)continue; const dx=bp.x-car.x,dy=bp.y-car.y; if(dx*dx+dy*dy>1600*1600)continue;
+    for(const bp of boosts){ if(bp.cd>0)continue; if(!inView(bp.x,bp.y,60))continue;
       const pul=0.72+0.28*Math.sin(now*0.006+bp.ph);
       ctx.save(); ctx.translate(bp.x,bp.y);
       ctx.globalAlpha=0.28*pul; ctx.fillStyle=COL.cyan; ctx.beginPath(); ctx.arc(0,0,36*pul,0,7); ctx.fill();   // outer glow
@@ -1251,7 +1449,7 @@
       for(const sd of [1,-1]){ ctx.fillStyle=GGd; ctx.beginPath(); ctx.arc(p.x+n.x*(ROAD_W*0.5+50)*sd,p.y+n.y*(ROAD_W*0.5+50)*sd,10,0,7); ctx.fill(); } }
     ctx.restore(); }
   function drawDeco(){ if(lite || !deco.length)return; const now=performance.now();
-    for(const d of deco){ const dx=d.x-car.x,dy=d.y-car.y; if(dx*dx+dy*dy>1300*1300)continue; ctx.save(); ctx.translate(d.x,d.y);
+    for(const d of deco){ if(!inView(d.x,d.y,40))continue; ctx.save(); ctx.translate(d.x,d.y);
       if(d.k==='palm'){ ctx.globalAlpha=0.26; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(3,2,20,9,0,0,7); ctx.fill(); ctx.globalAlpha=1;
         ctx.fillStyle='#6b4a28'; ctx.fillRect(-2.5,-4,5,9);
         const sway=Math.sin(now*0.002+d.ph)*0.18; ctx.fillStyle=night?'#2c5e2b':'#3f8a3a';
@@ -1272,7 +1470,7 @@
   function drawLamps(){ if(lite||!lamps.length)return;
     if(night && !_lampPool){ _lampPool=document.createElement('canvas'); _lampPool.width=_lampPool.height=128; const g=_lampPool.getContext('2d');
       const rg=g.createRadialGradient(64,64,4,64,64,64); rg.addColorStop(0,'rgba(255,216,150,0.55)'); rg.addColorStop(0.5,'rgba(255,198,120,0.20)'); rg.addColorStop(1,'rgba(255,198,120,0)'); g.fillStyle=rg; g.fillRect(0,0,128,128); }
-    for(const L of lamps){ const dx=L.x-car.x,dy=L.y-car.y; if(dx*dx+dy*dy>1150*1150)continue;
+    for(const L of lamps){ if(!inView(L.x,L.y,ROAD_W*0.6))continue;
       if(night){ const PR=ROAD_W*0.55; ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=0.85; ctx.drawImage(_lampPool,L.px-PR,L.py-PR,PR*2,PR*2); ctx.restore(); }   // warm pool on the road
       ctx.globalAlpha=0.26; ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(L.x+2,L.y+2,7,3.4,0,0,7); ctx.fill(); ctx.globalAlpha=1;   // base shadow
       ctx.strokeStyle=night?'#43464f':'#7c7f89'; ctx.lineWidth=3; ctx.lineCap='round'; ctx.beginPath(); ctx.moveTo(L.x,L.y); ctx.lineTo(L.px,L.py); ctx.stroke();   // arm over the curb
@@ -1280,10 +1478,686 @@
       ctx.fillStyle=night?'#ffe6a6':'#d2d6de'; ctx.beginPath(); ctx.arc(L.px,L.py,3.6,0,7); ctx.fill();   // lamp head
       if(night){ ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=0.9; ctx.fillStyle='#ffdca0'; ctx.beginPath(); ctx.arc(L.px,L.py,5.5,0,7); ctx.fill(); ctx.restore(); } }   // head bulb glow
   }
-  function drawCracks(){ if(lite||!cracks.length)return; ctx.strokeStyle=night?'rgba(0,0,0,0.5)':'rgba(20,20,26,0.34)'; ctx.lineWidth=1.3; ctx.lineCap='round';
-    for(const c of cracks){ const dx=c[0].x-car.x,dy=c[0].y-car.y; if(dx*dx+dy*dy>820*820)continue; ctx.beginPath(); for(let i=0;i<c.length;i++)i?ctx.lineTo(c[i].x,c[i].y):ctx.moveTo(c[i].x,c[i].y); ctx.stroke(); } }
+  // Every crack lives in one baked Path2D — a single stroke call instead of one per crack.
+  function drawCracks(){ if(lite||!CRACKP)return; ctx.strokeStyle=night?'rgba(0,0,0,0.5)':'rgba(20,20,26,0.34)'; ctx.lineWidth=1.3; ctx.lineCap='round'; ctx.stroke(CRACKP); }
+  // ==========================================================================================================
+  //  PSEUDO-3D CHASE RENDERER  —  the Need-for-Speed view
+  // ----------------------------------------------------------------------------------------------------------
+  //  The flat renderer puts the whole world under ONE canvas transform, and canvas2d transforms are affine, so
+  //  they cannot produce perspective. This path throws that away: nothing uses ctx.translate/scale for the world.
+  //  Every world point is pushed through a real pinhole camera sitting BEHIND and ABOVE the car, and the geometry
+  //  is emitted already in screen space. That is what makes the road narrow toward a horizon and the buildings
+  //  stand up beside you instead of lying flat like a map.
+  //
+  //      forward  f =  (p-cam)·heading        right  r = (p-cam)·heading⊥        scale s = focal / f
+  //      screenX  = W/2 + r*s                 screenY = horizon + (camHeight - z)*s
+  //
+  //  z is height above the tarmac, so z=0 is the ground plane and a building's roof is z=h3d. Anything with
+  //  f < near is behind the lens and gets clipped away by p3Poly before it can wrap around into nonsense.
+  // ==========================================================================================================
+  const P3={back:340,height:200,focal:600,horizon:0,ca:1,sa:0,cx:0,cy:0,near:64,far:5600};
+  function p3Update(){
+    // CAMERA RIG — the three dials that decide how the chase view feels:
+    //   back   = how far behind the car the lens sits (smaller = closer, car reads bigger)
+    //   height = how high above the tarmac (smaller = lower, you see the car's BACK rather than its roof)
+    //   horizon= screen row that infinitely-distant ground maps to; effectively the pitch. Raising `horizon`
+    //            (pushing it down the screen) keeps the car planted low in frame as `height` comes down.
+    // height/back is the ratio that controls "how top-down does this feel". 0.67 here — HIGHER than the old flat
+    // camera's feel, deliberately: the brief is to keep the elevated vantage of the original top-down view but use
+    // perspective to see far further up the road than an orthographic view ever could. The horizon sits high on the
+    // screen (18%) so roughly four fifths of the frame is street ahead of you, compressing away toward the skyline.
+    P3.focal=Math.max(400,H*0.92);        // focal tied to viewport height → the field of view is the same on any window
+    P3.height=CAM_H; P3.back=CAM_BACK;    // high and angled — a helicopter tucked in behind the car
+    // Derive the horizon so the car lands exactly where CAM_CARY asks, whatever the height/distance are:
+    //   carScreenY = horizon + height*focal/back   →   horizon = carScreenY - height*focal/back
+    P3.horizon=Math.max(H*0.02,Math.min(H*0.56, H*CAM_CARY - P3.height*P3.focal/P3.back));
+    P3.far=6800;                          // we can see much further from up here, so let the draw distance follow
+    P3.ca=Math.cos(camAng); P3.sa=Math.sin(camAng);
+    P3.cx=car.x-P3.ca*P3.back; P3.cy=car.y-P3.sa*P3.back;   // the lens sits behind the car, looking over its roof
+  }
+  // Screen position of a single world point. Returns forward distance; s<=0 means "behind the lens, don't draw".
+  let p3x=0,p3y=0,p3s=0;
+  function p3(wx,wy,z){
+    const dx=wx-P3.cx, dy=wy-P3.cy, f=dx*P3.ca+dy*P3.sa;
+    if(f<P3.near){ p3s=0; return f; }
+    const s=P3.focal/f; p3s=s; p3x=W/2+(-dx*P3.sa+dy*P3.ca)*s; p3y=P3.horizon+(P3.height-z)*s; return f;
+  }
+  // Polygon pipeline. Load vertices with p3Set (world → camera space), then p3Poly clips them against the near
+  // plane and emits the survivors as a subpath. Sutherland–Hodgman against one plane, so a quad can become a
+  // pentagon — which is exactly what happens to the strip of road passing under the car.
+  const _pf=new Float64Array(48),_pr=new Float64Array(48),_pz=new Float64Array(48);   // sized for ellipse n-gons, not just quads
+  const _qf=new Float64Array(72),_qr=new Float64Array(72),_qz=new Float64Array(72);
+  function p3Set(i,wx,wy,z){ const dx=wx-P3.cx, dy=wy-P3.cy; _pf[i]=dx*P3.ca+dy*P3.sa; _pr[i]=-dx*P3.sa+dy*P3.ca; _pz[i]=z; }
+  function p3Poly(n){
+    let m=0;
+    for(let i=0;i<n;i++){ const j=(i+1)%n, fi=_pf[i], fj=_pf[j], ini=fi>=P3.near, inj=fj>=P3.near;
+      if(ini){ _qf[m]=fi; _qr[m]=_pr[i]; _qz[m]=_pz[i]; m++; }
+      if(ini!==inj){ const t=(P3.near-fi)/(fj-fi);
+        _qf[m]=P3.near; _qr[m]=_pr[i]+(_pr[j]-_pr[i])*t; _qz[m]=_pz[i]+(_pz[j]-_pz[i])*t; m++; } }
+    if(m<3)return false;
+    for(let i=0;i<m;i++){ const s=P3.focal/_qf[i]; const X=W/2+_qr[i]*s, Y=P3.horizon+(P3.height-_qz[i])*s; i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); }
+    ctx.closePath(); return true;
+  }
+  // convenience: one flat ground quad from four world points
+  function p3Quad(ax,ay,bx,by,cx2,cy2,dx2,dy2,z){ p3Set(0,ax,ay,z); p3Set(1,bx,by,z); p3Set(2,cx2,cy2,z); p3Set(3,dx2,dy2,z); return p3Poly(4); }
+  // ── SOLID-GEOMETRY HELPERS (landmarks) ──
+  // A flat disc/oval lying on the ground, as an n-gon. Perspective handles the foreshortening, so a circular park
+  // pond correctly becomes a squashed oval without anyone having to fake the squash.
+  function p3Ellipse(cx,cy,rx,ry,rot,z,n){
+    const N=n||20, ca=Math.cos(rot||0), sa=Math.sin(rot||0);
+    for(let i=0;i<N;i++){ const a=i/N*Math.PI*2, ex=Math.cos(a)*rx, ey=Math.sin(a)*ry;
+      p3Set(i, cx+ex*ca-ey*sa, cy+ex*sa+ey*ca, z||0); }
+    return p3Poly(N);
+  }
+  // A rotated rectangle lying on the ground.
+  function p3RectG(cx,cy,hw,hh,rot,z){
+    const ca=Math.cos(rot||0), sa=Math.sin(rot||0), q=[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
+    for(let i=0;i<4;i++)p3Set(i, cx+q[i][0]*ca-q[i][1]*sa, cy+q[i][0]*sa+q[i][1]*ca, z||0);
+    return p3Poly(4);
+  }
+  // An extruded box: the walls that face the lens, then the roof slab. Same camera-facing test the buildings use.
+  function p3Box(cx,cy,hw,hh,rot,z0,z1,sideCol,topCol,darken){
+    const ca=Math.cos(rot||0), sa=Math.sin(rot||0), X=[],Y=[];
+    for(const q of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]){ X.push(cx+q[0]*ca-q[1]*sa); Y.push(cy+q[0]*sa+q[1]*ca); }
+    ctx.fillStyle=sideCol; ctx.beginPath();
+    for(let e=0;e<4;e++){ const g=(e+1)%4, mx=(X[e]+X[g])*0.5, my=(Y[e]+Y[g])*0.5;
+      if((mx-P3.cx)*(mx-cx)+(my-P3.cy)*(my-cy)>=0)continue;   // wall points away from the lens
+      p3Set(0,X[e],Y[e],z0); p3Set(1,X[g],Y[g],z0); p3Set(2,X[g],Y[g],z1); p3Set(3,X[e],Y[e],z1); p3Poly(4); }
+    ctx.fill();
+    if(darken){ ctx.fillStyle='rgba(0,0,0,.22)'; ctx.beginPath();
+      for(let e=0;e<4;e++){ const g=(e+1)%4, mx=(X[e]+X[g])*0.5, my=(Y[e]+Y[g])*0.5;
+        if((mx-P3.cx)*(mx-cx)+(my-P3.cy)*(my-cy)>=0)continue;
+        p3Set(0,X[e],Y[e],z0); p3Set(1,X[g],Y[g],z0); p3Set(2,X[g],Y[g],z0+(z1-z0)*0.5); p3Set(3,X[e],Y[e],z0+(z1-z0)*0.5); p3Poly(4); }
+      ctx.fill(); }
+    ctx.fillStyle=topCol; ctx.beginPath();
+    for(let i=0;i<4;i++)p3Set(i,X[i],Y[i],z1);
+    p3Poly(4); ctx.fill();
+    return {X,Y};
+  }
+
+  // Which slice of the track is in front of the lens, and how far each node sits — recomputed once a frame and
+  // reused by every road layer so the strip is only walked one time.
+  const _tF=new Float64Array(TN+2);
+  let _t0=0,_tN=0;
+  function p3TrackRange(){
+    const base=nearestTrack(car.x,car.y).idx;
+    _t0=OPEN?Math.max(0,base-6):(base-6+TN)%TN;
+    _tN=0;
+    for(let k=0;k<TN;k++){ const idx=OPEN?Math.min(TN-1,_t0+k):(_t0+k)%TN, p=TRACK[idx];
+      const dx=p.x-P3.cx, dy=p.y-P3.cy, f=dx*P3.ca+dy*P3.sa;
+      _tF[k]=f; _tN=k+1;
+      if(f>P3.far)break;
+      if(OPEN && _t0+k>=TN-1)break; }
+  }
+  const _ti=k=>OPEN?Math.min(TN-1,_t0+k):(_t0+k)%TN;
+  // Build the road surface as ONE polygon — out along the left edge, back along the right — so there are no
+  // hairline seams between segments the way there would be with per-segment quads.
+  function p3Ribbon(halfA,halfB){
+    let n=0;
+    for(let k=0;k<_tN;k++){ const i=_ti(k), p=TRACK[i], nr=NRM[i]; p3Set(n++,p.x+nr.x*halfA,p.y+nr.y*halfA,0); if(n>=15)break; }
+    for(let k=_tN-1;k>=0;k--){ const i=_ti(k), p=TRACK[i], nr=NRM[i]; p3Set(n++,p.x+nr.x*halfB,p.y+nr.y*halfB,0); if(n>=15)break; }
+    return n;
+  }
+  // The ribbon can exceed the fixed vertex buffers on a long draw distance, so it is emitted in overlapping
+  // chunks instead: each chunk is a short strip that shares an edge with the next, which stays seam-free.
+  function p3Strip(halfA,halfB,z){
+    for(let k=0;k+1<_tN;k++){
+      if(_tF[k]<P3.near*0.4 && _tF[k+1]<P3.near*0.4)continue;
+      const i=_ti(k), j=_ti(k+1), p=TRACK[i], q=TRACK[j], np=NRM[i], nq=NRM[j];
+      p3Set(0,p.x+np.x*halfA,p.y+np.y*halfA,z); p3Set(1,q.x+nq.x*halfA,q.y+nq.y*halfA,z);
+      p3Set(2,q.x+nq.x*halfB,q.y+nq.y*halfB,z); p3Set(3,p.x+np.x*halfB,p.y+np.y*halfB,z);
+      p3Poly(4); }
+  }
+  // A vertical wall following the track edge (the kerb rail) — bottom edge on the ground, top edge at height h.
+  function p3Wall(half,h){
+    for(let k=0;k+1<_tN;k++){
+      if(_tF[k]<P3.near*0.4 && _tF[k+1]<P3.near*0.4)continue;
+      const i=_ti(k), j=_ti(k+1), p=TRACK[i], q=TRACK[j], np=NRM[i], nq=NRM[j];
+      const ax=p.x+np.x*half, ay=p.y+np.y*half, bx=q.x+nq.x*half, by=q.y+nq.y*half;
+      p3Set(0,ax,ay,0); p3Set(1,bx,by,0); p3Set(2,bx,by,h); p3Set(3,ax,ay,h);
+      p3Poly(4); }
+  }
+  // Same strip, but over an explicit slice of the track (used by the river, the overpass deck and the jump ramp,
+  // which live at fixed indices rather than "whatever is in front of you").
+  function p3RangeStrip(i0,i1,halfA,halfB,z){
+    for(let i=i0;i<i1;i++){
+      const a=OPEN?Math.min(TN-1,i):((i%TN)+TN)%TN, b=OPEN?Math.min(TN-1,i+1):(((i+1)%TN)+TN)%TN;
+      const p=TRACK[a], q=TRACK[b], np=NRM[a], nq=NRM[b];
+      const fa=(p.x-P3.cx)*P3.ca+(p.y-P3.cy)*P3.sa; if(fa>P3.far)continue;
+      p3Set(0,p.x+np.x*halfA,p.y+np.y*halfA,z); p3Set(1,q.x+nq.x*halfA,q.y+nq.y*halfA,z);
+      p3Set(2,q.x+nq.x*halfB,q.y+nq.y*halfB,z); p3Set(3,p.x+np.x*halfB,p.y+np.y*halfB,z);
+      p3Poly(4); }
+  }
+  // depth-sorted object list (buildings, crowd, deco, lamps, cars, particles all share one painter's ordering)
+  const _o3=[];
+  function o3(kind,ref,f,extra){ _o3.push({k:kind,r:ref,f,e:extra}); }
+
+  function draw3D(){
+    const _t=TH();
+    p3Update(); p3TrackRange();
+    const HZ=P3.horizon, GROUND=night?_t.nGround:_t.ground;
+    // ── SKY above the horizon, GROUND below ──
+    { const sg=ctx.createLinearGradient(0,0,0,HZ);
+      sg.addColorStop(0,night?_t.nSkyIn:_t.skyIn); sg.addColorStop(1,night?_t.nSkyOut:_t.skyOut);
+      ctx.fillStyle=sg; ctx.fillRect(0,0,W,HZ+1);
+      const gg=ctx.createLinearGradient(0,HZ,0,H);
+      gg.addColorStop(0,night?_t.nSkyOut:_t.skyOut); gg.addColorStop(0.14,GROUND); gg.addColorStop(1,GROUND);
+      ctx.fillStyle=gg; ctx.fillRect(0,HZ,W,H-HZ); }
+    if(_t.sun&&!night){ const sg2=ctx.createRadialGradient(W*0.5,HZ*0.55,8,W*0.5,HZ*0.55,H*0.5); sg2.addColorStop(0,'rgba(255,246,206,0.8)'); sg2.addColorStop(1,'rgba(255,226,150,0)'); ctx.fillStyle=sg2; ctx.fillRect(0,0,W,H); }
+
+    const HALF=ROAD_W*0.5;
+    // ── RIVER, under the road so the span reads as a bridge over it ──
+    if(WATER){ const a=Math.max(0,WATER.a-5), b=Math.min(TN-1,WATER.b+5);
+      ctx.fillStyle=night?'#0a2c44':'#123f5c'; ctx.beginPath(); p3RangeStrip(a,b,-(HALF+320),HALF+320,-30); ctx.fill();
+      ctx.fillStyle=night?'#0e3a58':'#185273'; ctx.beginPath(); p3RangeStrip(a,b,-(HALF+200),HALF+200,-28); ctx.fill();
+      ctx.fillStyle='rgba(130,205,240,0.14)'; ctx.beginPath();
+      for(let s=-1;s<=1;s++){ const off=s*95+Math.sin(performance.now()*0.002+s*2)*20; p3RangeStrip(a,b,off-4,off+4,-26); }
+      ctx.fill(); }
+    // ── GOLDEN GATE: the bay and the deck go UNDER the tarmac (you drive across the span, so it can't be an object) ──
+    const GGL=landmarks.find(L=>L.k==='goldengate');
+    if(GGL){ const A=Math.max(0,GGL.idx-(GGL.span||11)), B=Math.min(TN-1,GGL.idx+(GGL.span||11));
+      ctx.fillStyle=night?'#0f2a3c':'#2c6a86'; ctx.beginPath(); p3RangeStrip(A,B,-(HALF+640),HALF+640,-40); ctx.fill();
+      ctx.fillStyle=night?'#173e56':'#3a809c'; ctx.beginPath(); p3RangeStrip(A,B,-(HALF+430),HALF+430,-38); ctx.fill();
+      ctx.globalAlpha=0.16; ctx.fillStyle='#bfe6f4'; ctx.beginPath();
+      for(let s=0;s<4;s++){ const off=(s-1.5)*160+Math.sin(performance.now()*0.002+s)*18; p3RangeStrip(A,B,off-5,off+5,-36); }
+      ctx.fill(); ctx.globalAlpha=1;
+      ctx.fillStyle=night?'#8f3616':'#b8461f'; ctx.beginPath(); p3RangeStrip(A,B,-(HALF+34),HALF+34,-2); ctx.fill(); }   // orange deck
+    // ── TARMAC ──
+    ctx.fillStyle=night?_t.nRoad:_t.road; ctx.beginPath(); p3Strip(-HALF,HALF,0); ctx.fill();
+    if(wet&&!lite&&PERF.lvl<2){ ctx.fillStyle=night?'rgba(40,70,120,0.16)':'rgba(120,150,190,0.13)'; ctx.beginPath(); p3Strip(-HALF,HALF,0); ctx.fill(); }
+    if(!lite){   // worn racing-line grooves
+      ctx.fillStyle=night?'rgba(0,0,0,0.16)':'rgba(0,0,0,0.10)';
+      ctx.beginPath(); p3Strip(-HALF*0.46,-HALF*0.26,0); p3Strip(HALF*0.26,HALF*0.46,0); ctx.fill(); }
+    // centre lane dashes — real quads on the ground so they foreshorten with the road
+    { ctx.fillStyle=_t.lane; ctx.beginPath();
+      for(let k=0;k+1<_tN;k+=2){ if(_tF[k]<P3.near*0.4)continue;
+        const i=_ti(k), j=_ti(k+1), p=TRACK[i], q=TRACK[j], np=NRM[i], nq=NRM[j], w=5;
+        p3Set(0,p.x+np.x*w,p.y+np.y*w,0); p3Set(1,q.x+nq.x*w,q.y+nq.y*w,0);
+        p3Set(2,q.x-nq.x*w,q.y-nq.y*w,0); p3Set(3,p.x-np.x*w,p.y-np.y*w,0); p3Poly(4); }
+      ctx.fill(); }
+    // ── GROUND DECALS ──
+    if(!lite){ ctx.strokeStyle=night?'rgba(0,0,0,0.45)':'rgba(20,20,26,0.3)'; ctx.lineWidth=1.2; ctx.beginPath();
+      for(const c of cracks){ let started=false;
+        for(let i=0;i<c.length;i++){ const f=p3(c[i].x,c[i].y,0); if(f<P3.near||f>1800){started=false;continue;}
+          if(!started){ ctx.moveTo(p3x,p3y); started=true; } else ctx.lineTo(p3x,p3y); } }
+      ctx.stroke(); }
+    if(wet&&!lite){ for(const pd of puddles){ const f=p3(pd.x,pd.y,0); if(p3s<=0||f>2200)continue;
+        // flattened hard by perspective and kept translucent — a dark full-strength ellipse reads as a hole in the road
+        ctx.globalAlpha=0.30; ctx.fillStyle=night?'rgba(90,140,200,0.55)':'rgba(150,180,220,0.5)';
+        ctx.beginPath(); ctx.ellipse(p3x,p3y,pd.len*p3s,Math.max(0.5,pd.wid*p3s*0.22),0,0,7); ctx.fill(); ctx.globalAlpha=1; } }
+    // TYRE MARKS. These were near-invisible because they were drawn #08080d on a #141026 road — black on near-black.
+    // Rubber gets TWO passes now: a scuffed lighter halo that actually contrasts against dark tarmac, and a darker
+    // core inside it. Oriented along travel, so consecutive marks overlap into continuous streaks.
+    // Both passes are built in ONE walk of the array: the scuff halo goes into a Path2D while the dark core goes
+    // into the live path, so the marks are only projected and clipped once per frame instead of twice.
+    // Two flat fills: a scuff halo that contrasts against dark tarmac, then the darker core inside it. Cheap now
+    // that emission is distance-based — only a hundred or so marks are ever in front of you.
+    { const wide=8, long=21;
+      ctx.fillStyle=night?'rgba(150,146,170,0.15)':'rgba(168,162,190,0.19)'; ctx.beginPath();
+      for(const s of skid){ const f=(s.x-P3.cx)*P3.ca+(s.y-P3.cy)*P3.sa; if(f<P3.near||f>1500)continue;
+        const c=Math.cos(s.h||0)*long, n=Math.sin(s.h||0)*long, hx=-Math.sin(s.h||0)*wide, hy=Math.cos(s.h||0)*wide;
+        p3Quad(s.x+c+hx,s.y+n+hy, s.x+c-hx,s.y+n-hy, s.x-c-hx,s.y-n-hy, s.x-c+hx,s.y-n+hy, 0.5); }
+      ctx.fill();
+      ctx.fillStyle='#07060c'; ctx.globalAlpha=0.62; ctx.beginPath();
+      for(const s of skid){ const f=(s.x-P3.cx)*P3.ca+(s.y-P3.cy)*P3.sa; if(f<P3.near||f>1500)continue;
+        const c=Math.cos(s.h||0)*long, n=Math.sin(s.h||0)*long, kx=-Math.sin(s.h||0)*wide*0.62, ky=Math.cos(s.h||0)*wide*0.62;
+        p3Quad(s.x+c+kx,s.y+n+ky, s.x+c-kx,s.y+n-ky, s.x-c-kx,s.y-n-ky, s.x-c+kx,s.y-n+ky, 0.6); }
+      ctx.fill(); ctx.globalAlpha=1; }
+    ctx.globalAlpha=1;
+    // finish line — a checkered band laid across the road
+    { const fi=FINISHIDX, p=TRACK[fi], nr=NRM[fi], q=TRACK[(fi+2)%TN], nq=NRM[(fi+2)%TN];
+      // same edge-on guard as the checkpoint gates — measure the nearest end of the band, not its middle
+      const fwd=Math.min((p.x+nr.x*HALF-P3.cx)*P3.ca+(p.y+nr.y*HALF-P3.cy)*P3.sa,
+                         (p.x-nr.x*HALF-P3.cx)*P3.ca+(p.y-nr.y*HALF-P3.cy)*P3.sa);
+      if(fwd>P3.near*1.5&&fwd<P3.far){ const NB=10;
+        for(let b=0;b<NB;b++){ const u0=-HALF+(2*HALF)*b/NB, u1=-HALF+(2*HALF)*(b+1)/NB;
+          ctx.fillStyle=(b%2)?'#f4f4f4':'#141414'; ctx.beginPath();
+          p3Set(0,p.x+nr.x*u0,p.y+nr.y*u0,0); p3Set(1,p.x+nr.x*u1,p.y+nr.y*u1,0);
+          p3Set(2,q.x+nq.x*u1,q.y+nq.y*u1,0); p3Set(3,q.x+nq.x*u0,q.y+nq.y*u0,0); p3Poly(4); ctx.fill(); } } }
+    // ── KERB RAILS: a real vertical wall each side, with the striped top edge riding it ──
+    for(const side of [1,-1]){ const h=side>0?HALF:-HALF, KH=48, KW=26;
+      ctx.fillStyle=night?'rgba(9,15,30,0.94)':'rgba(26,18,44,0.92)'; ctx.beginPath(); p3Wall(h,KH); ctx.fill();   // the rail's vertical face
+      ctx.fillStyle=night?'rgba(76,224,224,.9)':'#e0554f'; ctx.beginPath(); p3Strip(h,h-side*KW,KH); ctx.fill();   // coloured cap
+      ctx.fillStyle='rgba(255,255,255,.9)'; ctx.beginPath();                                                       // alternating white blocks
+      for(let k=0;k+2<_tN;k+=4){ if(_tF[k]<P3.near*0.4)continue;
+        const i=_ti(k), j=_ti(k+2), p=TRACK[i], q=TRACK[j], np=NRM[i], nq=NRM[j];
+        p3Set(0,p.x+np.x*h,p.y+np.y*h,KH); p3Set(1,q.x+nq.x*h,q.y+nq.y*h,KH);
+        p3Set(2,q.x+nq.x*(h-side*KW),q.y+nq.y*(h-side*KW),KH); p3Set(3,p.x+np.x*(h-side*KW),p.y+np.y*(h-side*KW),KH); p3Poly(4); }
+      ctx.fill();
+      ctx.fillStyle=night?'rgba(76,224,224,.5)':'rgba(201,168,76,.55)'; ctx.beginPath(); p3Strip(h,h-side*8,KH+1); ctx.fill(); }   // bright outer lip
+    // ── OVERPASS DECK (figure-8 crossing) ──
+    if(BRIDGE){ const bi=BRIDGE.i;
+      ctx.fillStyle=night?'#181228':'#241a34'; ctx.beginPath(); p3RangeStrip(bi-3,bi+4,-(HALF+56),HALF+56,26); ctx.fill();
+      ctx.fillStyle=COL.gold; ctx.beginPath(); p3RangeStrip(bi-3,bi+4,HALF+42,HALF+56,32); p3RangeStrip(bi-3,bi+4,-(HALF+56),-(HALF+42),32); ctx.fill(); }
+    // ── JUMP KICKER ──
+    if(JUMP){ const a=JUMP.a;
+      ctx.fillStyle='rgba(76,224,224,0.55)'; ctx.beginPath(); p3RangeStrip(a,a+2,-HALF*0.9,HALF*0.9,0); ctx.fill();
+      ctx.fillStyle='#0a0a12'; ctx.beginPath(); p3RangeStrip(a,a+1,-HALF*0.6,HALF*0.6,1); ctx.fill();
+      ctx.fillStyle=COL.gold; ctx.beginPath(); p3RangeStrip(a+1,a+2,-HALF*0.3,HALF*0.3,2); ctx.fill(); }
+    // ── TURN GUIDE — chevrons laid on the racing line, colour = how sharp the corner is ──
+    if(assist&&phase==='racing'){ const base=nearestTrack(car.x,car.y).idx;
+      for(let s=0;s<8;s++){ const idx=(base+6+s*4)%TN, p=TRACK[idx], nr=NRM[idx];
+        const q=TRACK[(idx+5)%TN], qn=TRACK[(idx+7)%TN];
+        let dt=Math.atan2(qn.y-q.y,qn.x-q.x)-Math.atan2(TRACK[(idx+2)%TN].y-p.y,TRACK[(idx+2)%TN].x-p.x);
+        while(dt>Math.PI)dt-=2*Math.PI; while(dt<-Math.PI)dt+=2*Math.PI;
+        const sharp=Math.min(1,Math.abs(dt)*2.6), col=sharp<0.3?'76,224,224':sharp<0.6?'232,180,60':'232,90,60';
+        // narrow and translucent — a full-width opaque band across the tarmac reads as a road block, not a hint
+        ctx.fillStyle='rgba('+col+','+((0.30+sharp*0.16)*(1-s/11)).toFixed(3)+')';
+        const lat=Math.sign(dt||1)*HALF*0.22;   // nudged toward the inside of the coming corner
+        ctx.beginPath(); p3RangeStrip(idx,idx+1,lat-HALF*0.16,lat+HALF*0.16,1); ctx.fill(); } }
+    // ── CHECKPOINT GATES ──
+    CP.forEach((idx,k)=>{ const p=TRACK[idx], nr=NRM[idx], HW=ROAD_W*0.5+24;
+      // Test BOTH ends of the gate, not its centre. A gate seen nearly edge-on — which happens constantly on a
+      // curving track — can have its centre comfortably ahead while one post is already behind the lens; clipping
+      // then stretches that quad into a thin streak clean across the screen. Requiring the NEAREST end to clear the
+      // cull distance kills it.
+      const fa=(p.x+nr.x*HW-P3.cx)*P3.ca+(p.y+nr.y*HW-P3.cy)*P3.sa;
+      const fb=(p.x-nr.x*HW-P3.cx)*P3.ca+(p.y-nr.y*HW-P3.cy)*P3.sa;
+      const f=Math.min(fa,fb); if(f<520||f>P3.far)return;
+      o3('cp',{p,nr,lead:(k===nextCP)},f); });
+    // boost capsule pads
+    for(const bp of boosts){ if(bp.cd>0)continue; const f=p3(bp.x,bp.y,0); if(p3s<=0||f>2600)continue;
+      const pul=0.72+0.28*Math.sin(performance.now()*0.006+bp.ph);
+      ctx.globalAlpha=0.30*pul; ctx.fillStyle=COL.cyan; ctx.beginPath(); ctx.ellipse(p3x,p3y,36*p3s,18*p3s,0,0,7); ctx.fill(); ctx.globalAlpha=1;
+      o3('boost',bp,f); }
+
+    // ── DEPTH-SORTED UPRIGHT WORLD ──
+    _o3.length=0;
+    // Landmarks are huge, so they get a generous cull and sort into the same painter's ordering as everything else.
+    for(const L of landmarks){
+      if(L.k==='goldengate'){   // the towers straddle the road — each one is its own depth-sorted object
+        const A=Math.max(0,L.idx-(L.span||11)), B=Math.min(TN-1,L.idx+(L.span||11));
+        for(let ti=A+4; ti<=B-2; ti+=14){ const p=TRACK[(ti+TN)%TN], nr=NRM[(ti+TN)%TN], TOFF=ROAD_W*0.5+50;
+          const f=Math.min((p.x+nr.x*TOFF-P3.cx)*P3.ca+(p.y+nr.y*TOFF-P3.cy)*P3.sa,
+                           (p.x-nr.x*TOFF-P3.cx)*P3.ca+(p.y-nr.y*TOFF-P3.cy)*P3.sa);
+          // The towers straddle the roadway, so once you're level with one it spans the lens and near-plane clipping
+          // smears it into a wall of orange across the whole screen. Drop it well before you reach it.
+          if(f<780||f>P3.far)continue;
+          o3('ggtower',{p,nr},f); }
+        continue; }
+      const f=(L.x-P3.cx)*P3.ca+(L.y-P3.cy)*P3.sa; if(f<-(L.s||200)||f>P3.far+2400)continue;
+      if(Math.abs(-(L.x-P3.cx)*P3.sa+(L.y-P3.cy)*P3.ca)>f*1.3+(L.s||200)*2.2)continue;
+      o3('lm',L,f); }
+    // NEAR-CAMERA FADE. The lens trails 545 units behind the car along its heading, so when you're hugging a kerb it
+    // ends up only a stone's throw from the buildings on that side. One of those, being nearer than the car, sorts
+    // ON TOP of it and swallows half the screen. Anything that close is level with or behind you and contributes
+    // nothing but clutter, so it fades out rather than popping.
+    for(const b of props){ const f=p3(b.x,b.y,0); if(f<260||f>P3.far)continue;
+      const lat=Math.abs(-(b.x-P3.cx)*P3.sa+(b.y-P3.cy)*P3.ca);
+      if(lat>f*1.15+700)continue;   // outside the view cone
+      // Fade needs BOTH tests. Distance alone wasn't enough: a building can clear the near cut-off and still sit
+      // between the lens and the car, nearly straight up the view axis, where it sorts on top and slices the car in
+      // half. Keep it if it's either far enough away OR far enough off to the side — cull only when it's both close
+      // and dead ahead, which is the one case that can never be anything but an occluder.
+      let fade=1;
+      if(f<680){ const dF=Math.max(0,Math.min(1,(f-260)/420)), rF=Math.max(0,Math.min(1,(lat-150)/210)); fade=Math.max(dF,rF); }
+      if(fade<=0.02)continue;
+      o3('bld',b,f,fade); }
+    if(!lite)for(const cl of crowd){ const f=p3(cl.x,cl.y,0); if(p3s<=0||f>2400)continue;
+      if(Math.abs(-(cl.x-P3.cx)*P3.sa+(cl.y-P3.cy)*P3.ca)>f*1.1+400)continue; o3('crowd',cl,f); }
+    if(!lite)for(const d of deco){ const f=p3(d.x,d.y,0); if(p3s<=0||f>2000)continue; o3('deco',d,f); }
+    if(!lite)for(const L of lamps){ const f=p3(L.x,L.y,0); if(p3s<=0||f>2200)continue; o3('lamp',L,f); }
+    for(const r of rivals){ const f=p3(r.x,r.y,0); if(p3s<=0||f>P3.far)continue; o3('rival',r,f); }
+    for(const cp of cops){ const f=p3(cp.x,cp.y,0); if(p3s<=0||f>P3.far)continue; o3('cop',cp,f); }
+    { const f=p3(car.x,car.y,0); if(p3s>0)o3('player',car,f); }
+    for(const p of smoke){ const f=p3(p.x,p.y,14); if(p3s<=0||f>1600)continue; o3('smoke',p,f); }
+    for(const p of trail){ const f=p3(p.x,p.y,16); if(p3s<=0||f>1600)continue; o3('trail',p,f); }
+    for(const p of sparks){ const f=p3(p.x,p.y,18); if(p3s<=0||f>1600)continue; o3('spark',p,f); }
+    for(const g of rings){ const f=p3(g.x,g.y,10); if(p3s<=0||f>2000)continue; o3('ring',g,f); }
+    _o3.sort((a,b)=>b.f-a.f);
+    for(const o of _o3){
+      switch(o.k){
+        case 'lm':    p3Landmark(o.r,o.f); break;
+        case 'ggtower': { const {p,nr}=o.r, GG=night?'#c24a22':'#e35b2c', GGd=night?'#8f3616':'#b8461f', TH2=300, OFF=ROAD_W*0.5+50;
+          for(const sd of [1,-1]){ const tx=p.x+nr.x*OFF*sd, ty=p.y+nr.y*OFF*sd;   // two orange towers rising out of the bay
+            p3Box(tx,ty,26,26,0,-40,TH2,GGd,GG,false); }
+          ctx.fillStyle=GG; ctx.beginPath();                                       // cross-beam over the roadway
+          p3Set(0,p.x-nr.x*OFF,p.y-nr.y*OFF,TH2*0.86); p3Set(1,p.x+nr.x*OFF,p.y+nr.y*OFF,TH2*0.86);
+          p3Set(2,p.x+nr.x*OFF,p.y+nr.y*OFF,TH2*0.74); p3Set(3,p.x-nr.x*OFF,p.y-nr.y*OFF,TH2*0.74); p3Poly(4); ctx.fill();
+          break; }
+        case 'bld':   if(o.e!=null&&o.e<1){ if(o.e<=0)break; ctx.globalAlpha=o.e; p3Building(o.r,o.f); ctx.globalAlpha=1; } else p3Building(o.r,o.f); break;
+        // The flat renderer's roadside art was never drawn to world scale — it was sized to look right on a map.
+        // These multipliers put each piece at a believable real height next to a 600-unit-wide road.
+        case 'crowd': p3Billboard(o.r.x,o.r.y,()=>p3CrowdArt(o.r),1.9); break;
+        case 'deco':  p3Billboard(o.r.x,o.r.y,()=>p3DecoArt(o.r),3.2); break;
+        case 'lamp':  p3Billboard(o.r.x,o.r.y,()=>p3LampArt(o.r),3.0); break;
+        case 'player':p3Car(car.x,car.y,car.a,CARS[playerCar],true); break;
+        case 'rival': p3Car(o.r.x,o.r.y,o.r.a,CARS[o.r.carIdx||0],false); break;
+        case 'cop':   p3Car(o.r.x,o.r.y,o.r.a,{id:'ct6',s:0.150},false,true); break;
+        case 'smoke': { const p=o.r; p3(p.x,p.y,14); ctx.globalAlpha=p.a*0.5; ctx.fillStyle=p.col||(night?'#9fb0d0':'#c9bfe0'); ctx.beginPath(); ctx.arc(p3x,p3y,Math.max(0.6,p.r*p3s),0,7); ctx.fill(); ctx.globalAlpha=1; break; }
+        // Nitro jet — flattened onto the road plane and kept small. Screen-space radii blew up into a white blob
+        // because the exhaust sits a couple of car-lengths from the lens where the perspective scale is largest.
+        case 'trail': { const p=o.r; p3(p.x,p.y,14); ctx.save(); ctx.globalCompositeOperation='lighter'; const R=Math.min(46,Math.max(0.6,p.r*p3s*0.5));
+          ctx.globalAlpha=p.a*0.16; ctx.fillStyle='#7a3fd0'; ctx.beginPath(); ctx.ellipse(p3x,p3y,R*1.5,R*0.5,0,0,7); ctx.fill();
+          ctx.globalAlpha=p.a*0.24; ctx.fillStyle=COL.cyan;  ctx.beginPath(); ctx.ellipse(p3x,p3y,R*1.0,R*0.34,0,0,7); ctx.fill();
+          ctx.globalAlpha=p.a*0.42; ctx.fillStyle='#eafcff'; ctx.beginPath(); ctx.ellipse(p3x,p3y,R*0.5,R*0.20,0,0,7); ctx.fill();
+          ctx.restore(); ctx.globalAlpha=1; break; }
+        case 'spark': { const p=o.r; p3(p.x,p.y,18); ctx.globalAlpha=p.a; ctx.fillStyle=p.col||COL.gold; ctx.beginPath(); ctx.arc(p3x,p3y,Math.max(0.5,p.r*p3s),0,7); ctx.fill(); ctx.globalAlpha=1; break; }
+        case 'ring':  { const g=o.r; p3(g.x,g.y,10); ctx.globalAlpha=g.a*0.9; ctx.strokeStyle=g.col; ctx.lineWidth=Math.max(1,(2.5+g.a*3.5)*p3s); ctx.beginPath(); ctx.ellipse(p3x,p3y,g.r*p3s,g.r*p3s*0.45,0,0,7); ctx.stroke(); ctx.globalAlpha=1; break; }
+        // Checkpoint as a GATE you drive through — two posts and a header beam spanning the road. Reads far better
+        // in a chase view than the flat renderer's flower-of-life ring, which would just be a squashed ellipse.
+        case 'cp': { const {p,nr,lead}=o.r, HW=ROAD_W*0.5+24, GH=190, col=lead?COL.cyan:COL.gold;
+          ctx.fillStyle=col; ctx.globalAlpha=lead?0.85:0.5;
+          for(const sd of [1,-1]){ const px=p.x+nr.x*HW*sd, py=p.y+nr.y*HW*sd;
+            ctx.beginPath(); p3Set(0,px-nr.x*9,py-nr.y*9,0); p3Set(1,px+nr.x*9,py+nr.y*9,0);
+            p3Set(2,px+nr.x*9,py+nr.y*9,GH); p3Set(3,px-nr.x*9,py-nr.y*9,GH); p3Poly(4); ctx.fill(); }
+          ctx.beginPath();
+          p3Set(0,p.x-nr.x*HW,p.y-nr.y*HW,GH); p3Set(1,p.x+nr.x*HW,p.y+nr.y*HW,GH);
+          p3Set(2,p.x+nr.x*HW,p.y+nr.y*HW,GH-22); p3Set(3,p.x-nr.x*HW,p.y-nr.y*HW,GH-22); p3Poly(4); ctx.fill();
+          ctx.globalAlpha=1; break; }
+        case 'boost': { const bp=o.r, f=p3(bp.x,bp.y,26); if(p3s<=0)break; const R=22*p3s;
+          ctx.save(); ctx.translate(p3x,p3y); ctx.fillStyle='#8ff6ff'; ctx.beginPath();
+          for(let i=0;i<6;i++){ const a=i/6*Math.PI*2-Math.PI/2; i?ctx.lineTo(Math.cos(a)*R,Math.sin(a)*R):ctx.moveTo(Math.cos(a)*R,Math.sin(a)*R); }
+          ctx.closePath(); ctx.fill(); ctx.strokeStyle='#eafcff'; ctx.lineWidth=Math.max(1,2.5*p3s); ctx.stroke(); ctx.restore(); break; }
+      }
+    }
+    // ── DISTANCE HAZE — fades the far end of the street into the sky so the draw limit never shows as a hard edge ──
+    // Centred ON the horizon and fading out BOTH ways. Starting it flat at the horizon line painted a hard band
+    // straight across the skyline — the haze has to bleed up into the buildings as well as down onto the road.
+    { const top=HZ-H*0.16, bot=HZ+H*0.20, hz=ctx.createLinearGradient(0,top,0,bot);
+      const hc=night?(_t.nSkyOut):(_t.haze||_t.skyOut);
+      hz.addColorStop(0,'rgba(0,0,0,0)'); hz.addColorStop(0.45,hc); hz.addColorStop(0.55,hc); hz.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.globalAlpha=night?0.7:0.55; ctx.fillStyle=hz; ctx.fillRect(0,top,W,bot-top); ctx.globalAlpha=1; }
+  }
+  // ── AERIAL PERSPECTIVE (distance fog) ──
+  // The single strongest depth cue available for free: bleed a surface's colour toward the horizon haze as it gets
+  // further away. Without it every building reads at the same "distance" no matter where it is and the street
+  // flattens out. Results are cached per (colour, haze, distance-bucket) so the hot path never parses hex.
+  // Cache is nested Map→Map→Array rather than one map keyed by a built string: this runs four times per building
+  // per frame, and concatenating a fresh key string each call is real work for something with ~7 distinct inputs.
+  const _fogCache=new Map();
+  function fogMix(hex,t,target){
+    if(t<=0.02||hex.charAt(0)!=='#')return hex;
+    let m=_fogCache.get(target); if(!m){ m=new Map(); _fogCache.set(target,m); }
+    let arr=m.get(hex); if(!arr){ arr=new Array(14); m.set(hex,arr); }
+    const bk=(t*12)|0; const hit=arr[bk]; if(hit!==undefined)return hit;
+    const a=parseInt(hex.slice(1),16), b=parseInt(target.slice(1),16);
+    const r=Math.round(((a>>16)&255)+((((b>>16)&255)-((a>>16)&255))*t));
+    const g=Math.round(((a>>8)&255)+((((b>>8)&255)-((a>>8)&255))*t));
+    const bl=Math.round((a&255)+(((b&255)-(a&255))*t));
+    const v='#'+(((1<<24)+(r<<16)+(g<<8)+bl).toString(16).slice(1));
+    arr[bk]=v; return v;
+  }
+  // A building as a real box: base footprint on the ground, roof at z=h3d, only the walls facing the lens drawn.
+  function p3Building(b,f){
+    const bs=BSTYLE[TH().build]||BSTYLE.neon, WALL=night?bs.nWall:bs.wall, PARA=night?bs.nParapet:bs.parapet, BST=bs.sign;
+    const ca=Math.cos(b.a),sa=Math.sin(b.a),hw=b.w/2,hh=b.h/2, tp=b.taper||1, HT=b.h3d;
+    const cx=[],cy=[];
+    for(const q of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]){ cx.push(b.x+q[0]*ca-q[1]*sa); cy.push(b.y+q[0]*sa+q[1]*ca); }
+    const near=f<900*PERF_LOD, midLOD=f<1700*PERF_LOD;   // the governor pulls these in on rigs that can't hold frame rate
+    // aerial perspective — the further up the street a building sits, the more it bleeds into the horizon haze
+    const FOGC=night?(TH().nSkyOut||'#0a0a12'):(TH().haze||TH().skyOut||'#8a8a9a');
+    const FOGT=Math.max(0,Math.min(0.78,(f-650)/3600));
+    // walls — only the faces pointing at the camera
+    for(let e=0;e<4;e++){ const g=(e+1)%4;
+      const mx=(cx[e]+cx[g])*0.5, my=(cy[e]+cy[g])*0.5;                 // wall midpoint
+      if((mx-P3.cx)*(mx-b.x)+(my-P3.cy)*(my-b.y)>=0)continue;           // facing away → skip
+      const rx=b.x+(cx[e]-b.x)*tp, ry=b.y+(cy[e]-b.y)*tp, sx2=b.x+(cx[g]-b.x)*tp, sy2=b.y+(cy[g]-b.y)*tp;
+      ctx.fillStyle=fogMix(WALL[b.hue%WALL.length],FOGT,FOGC);
+      p3Set(0,cx[e],cy[e],0); p3Set(1,cx[g],cy[g],0); p3Set(2,sx2,sy2,HT); p3Set(3,rx,ry,HT);
+      ctx.beginPath(); p3Poly(4); ctx.fill();
+      ctx.fillStyle='rgba(0,0,0,'+(0.26*(1-FOGT)).toFixed(3)+')';   // grounded ambient occlusion, itself washed out by haze with distance
+      p3Set(0,cx[e],cy[e],0); p3Set(1,cx[g],cy[g],0);
+      p3Set(2,cx[g]+(sx2-cx[g])*0.5,cy[g]+(sy2-cy[g])*0.5,HT*0.5); p3Set(3,cx[e]+(rx-cx[e])*0.5,cy[e]+(ry-cy[e])*0.5,HT*0.5);
+      ctx.beginPath(); p3Poly(4); ctx.fill();
+      if(midLOD){   // window grid — batched by colour, five fills for the whole face
+        const floors=Math.max(3,Math.min(near?11:6,Math.round(HT/42))), cols=Math.max(2,Math.min(near?6:4,Math.round(b.w/32))), seed=(b.w*3+b.h)|0;
+        for(let q=0;q<5;q++)_wq[q].length=0;
+        for(let fl=0;fl<floors;fl++){ const z0=HT*(fl+0.22)/floors, z1=HT*(fl+0.78)/floors;
+          for(let c=0;c<cols;c++){ const u0=(c+0.22)/cols, u1=(c+0.78)/cols, qq=(fl*7+c*13+seed)%5, a=_wq[qq];
+            const b0x=cx[e]+(cx[g]-cx[e])*u0, b0y=cy[e]+(cy[g]-cy[e])*u0, r0x=rx+(sx2-rx)*u0, r0y=ry+(sy2-ry)*u0;
+            const b1x=cx[e]+(cx[g]-cx[e])*u1, b1y=cy[e]+(cy[g]-cy[e])*u1, r1x=rx+(sx2-rx)*u1, r1y=ry+(sy2-ry)*u1;
+            a.push(b0x,b0y,r0x,r0y,b1x,b1y,r1x,r1y,z0,z1); } }
+        for(let q=0;q<5;q++){ const a=_wq[q]; if(!a.length)continue;
+          ctx.fillStyle=(BST==='neon')?(night?(q===0?'rgba(255,216,146,.98)':q===1?'rgba(255,216,146,.64)':q===2?'rgba(76,224,224,.55)':q===3?'rgba(232,120,200,.42)':'rgba(8,6,20,.5)'):(q<3?'rgba(190,212,255,.46)':'rgba(0,0,0,.26)')):(night?(q<2?bs.nWin:'rgba(12,8,5,.5)'):(q<3?bs.win:'rgba(0,0,0,.26)'));
+          ctx.beginPath();
+          for(let i=0;i<a.length;i+=10){ const z0=a[i+8], z1=a[i+9];
+            const lx=a[i]+(a[i+2]-a[i])*(z0/HT), ly=a[i+1]+(a[i+3]-a[i+1])*(z0/HT);
+            const nx=a[i+4]+(a[i+6]-a[i+4])*(z0/HT), ny=a[i+5]+(a[i+7]-a[i+5])*(z0/HT);
+            const Lx=a[i]+(a[i+2]-a[i])*(z1/HT), Ly=a[i+1]+(a[i+3]-a[i+1])*(z1/HT);
+            const Nx=a[i+4]+(a[i+6]-a[i+4])*(z1/HT), Ny=a[i+5]+(a[i+7]-a[i+5])*(z1/HT);
+            p3Set(0,lx,ly,z0); p3Set(1,nx,ny,z0); p3Set(2,Nx,Ny,z1); p3Set(3,Lx,Ly,z1); p3Poly(4); }
+          ctx.fill(); }
+      }
+      // bright parapet lip along the top of the face
+      ctx.strokeStyle=PARA; ctx.lineWidth=Math.max(1,2*P3.focal/f*0.6);
+      ctx.beginPath(); p3(rx,ry,HT); const X0=p3x,Y0=p3y; p3(sx2,sy2,HT);
+      if(p3s>0){ ctx.moveTo(X0,Y0); ctx.lineTo(p3x,p3y); ctx.stroke(); }
+    }
+    // roof slab
+    ctx.fillStyle=fogMix(bs.roofImg?(night?'#180f26':'#2a1f48'):(night?bs.nRoofCol:bs.roofCol),FOGT,FOGC);
+    ctx.beginPath();
+    p3Set(0,b.x+(cx[0]-b.x)*tp,b.y+(cy[0]-b.y)*tp,HT); p3Set(1,b.x+(cx[1]-b.x)*tp,b.y+(cy[1]-b.y)*tp,HT);
+    p3Set(2,b.x+(cx[2]-b.x)*tp,b.y+(cy[2]-b.y)*tp,HT); p3Set(3,b.x+(cx[3]-b.x)*tp,b.y+(cy[3]-b.y)*tp,HT);
+    p3Poly(4); ctx.fill();
+    // storefront sign, hung on the face nearest the street
+    // Storefront sign, hung on the wall FACING THE STREET at shopfront height — not floating out in the middle of
+    // the block. Width is pinned to the building's own frontage so it never balloons on a close pass.
+    if(near && b.name){
+      let bi=-1,bd=1e18;
+      for(let e=0;e<4;e++){ const g=(e+1)%4, mx=(cx[e]+cx[g])*0.5, my=(cy[e]+cy[g])*0.5;
+        if((mx-P3.cx)*(mx-b.x)+(my-P3.cy)*(my-b.y)>=0)continue;
+        const dd=(mx-P3.cx)*(mx-P3.cx)+(my-P3.cy)*(my-P3.cy); if(dd<bd){bd=dd;bi=e;} }
+      if(bi>=0){ const g=(bi+1)%4, mx=(cx[bi]+cx[g])*0.5, my=(cy[bi]+cy[g])*0.5;
+        const face=Math.hypot(cx[g]-cx[bi],cy[g]-cy[bi]);
+        const sp=signSprite(b.name,BST,SIGNCOL[b.hue%4],13,150);
+        p3(mx,my,Math.min(HT*0.42,90));
+        if(p3s>0){ const wgt=Math.min(face*0.92,sp.w*1.6)*p3s, hgt=wgt*(sp.h/sp.w);
+          if(wgt>10&&wgt<300)ctx.drawImage(sp.cv,p3x-wgt/2,p3y-hgt/2,wgt,hgt); } } }
+    if(night && b.h3d>340){ const bl=0.4+0.6*Math.abs(Math.sin(performance.now()*0.004+b.x*0.017));
+      p3(b.x,b.y,HT+12); if(p3s>0){ ctx.globalAlpha=bl; ctx.fillStyle='#ff5b5b'; ctx.beginPath(); ctx.arc(p3x,p3y,Math.max(1,3.4*p3s),0,7); ctx.fill(); ctx.globalAlpha=1; } }
+  }
+  // ==========================================================================================================
+  //  LANDMARKS IN 3D — the flat renderer draws these as top-down decals, which is meaningless from a chase
+  //  camera. Here the flat ones (park lawn, lake, forecourts) stay on the ground plane as projected polygons,
+  //  and everything with mass — pyramids, the sphinx, the stadium bowl, buildings, bridge towers — is built as
+  //  actual geometry so it stands up beside you as you go past.
+  // ==========================================================================================================
+  function p3Landmark(L,f){
+    const R=L.s||200, rot=L.rot||0, n=night;
+    switch(L.k){
+      case 'park': {
+        ctx.fillStyle=n?'#1e3a20':'#3f7a3a'; ctx.beginPath(); p3RectG(L.x,L.y,R,R*0.72,rot,0); ctx.fill();
+        ctx.fillStyle=n?'#244824':'#4a8a44'; ctx.beginPath(); p3RectG(L.x,L.y,R*0.94,R*0.66,rot,1); ctx.fill();
+        ctx.fillStyle=n?'#3a3226':'#c2b083'; ctx.beginPath();                                   // crossing paths
+        p3RectG(L.x,L.y,R*0.9,R*0.05,rot,2); p3RectG(L.x,L.y,R*0.05,R*0.6,rot,2); ctx.fill();
+        ctx.fillStyle=n?'#0f2a3c':'#2c6a86'; ctx.beginPath(); p3Ellipse(L.x,L.y,R*0.16,R*0.16,0,3,16); ctx.fill();
+        for(let i=0;i<9;i++){ const a=i/9*Math.PI*2+0.3, ca=Math.cos(rot), sa=Math.sin(rot);
+          const ox=Math.cos(a)*R*0.62, oy=Math.sin(a)*R*0.44;
+          // same billboard scale the roadside trees use — keying it off the park's radius made 180-unit-tall trunks
+          p3Billboard(L.x+ox*ca-oy*sa, L.y+ox*sa+oy*ca, ()=>p3DecoArt({k:'tree'}), 2.8); }
+        break; }
+      case 'lake': {
+        ctx.fillStyle=n?'#22301c':'#5f7038'; ctx.beginPath(); p3Ellipse(L.x,L.y,R*1.1,R*0.82,rot,0,20); ctx.fill();
+        ctx.fillStyle=n?'#0f2a3c':'#2c6a86'; ctx.beginPath(); p3Ellipse(L.x,L.y,R*0.92,R*0.66,rot,-4,20); ctx.fill();
+        ctx.fillStyle=n?'#173e56':'#3a809c'; ctx.beginPath(); p3Ellipse(L.x,L.y,R*0.7,R*0.5,rot,-5,20); ctx.fill();
+        ctx.globalAlpha=0.22; ctx.fillStyle='#bfe6f4'; ctx.beginPath();
+        for(let s=0;s<3;s++)p3Ellipse(L.x,L.y,R*0.55,R*0.04,rot,-6+s*0.2,14); ctx.fill(); ctx.globalAlpha=1;
+        if(TH().palms)for(const sx of [-1,1])p3Billboard(L.x+sx*R*0.82*Math.cos(rot),L.y+sx*R*0.82*Math.sin(rot),()=>p3DecoArt({k:'palm',ph:sx}),3.0);
+        break; }
+      case 'gas': {
+        ctx.fillStyle=n?'#20222a':'#5a5e66'; ctx.beginPath(); p3RectG(L.x,L.y,R,R*0.62,rot,0); ctx.fill();
+        const ca=Math.cos(rot), sa=Math.sin(rot), at=(ox,oy)=>({x:L.x+ox*ca-oy*sa, y:L.y+ox*sa+oy*ca});
+        const shop=at(R*0.62,0); p3Box(shop.x,shop.y,R*0.3,R*0.25,rot,0,R*0.36,n?'#2a2438':'#c9b06a',n?'#1d1a2c':'#a8905a',true);
+        for(const px of [-R*0.62,-R*0.22]){ const pm=at(px,0); p3Box(pm.x,pm.y,R*0.05,R*0.08,rot,0,R*0.1,n?'#3a3a44':'#e8e8ee',COL.cyan,false); }
+        const can=at(-R*0.46,0);   // canopy slab on posts
+        for(const cx2 of [-R*0.42,R*0.42])for(const cy2 of [-R*0.3,R*0.3]){ const po=at(-R*0.46+cx2*0.5,cy2); p3Box(po.x,po.y,R*0.03,R*0.03,rot,0,R*0.3,'#8a8a92','#8a8a92',false); }
+        p3Box(can.x,can.y,R*0.46,R*0.36,rot,R*0.3,R*0.38,'#c43b3b',COL.gold,false);
+        break; }
+      case 'school': {
+        ctx.fillStyle=n?'#20222a':'#4a4e58'; ctx.beginPath(); p3RectG(L.x,L.y,R,R*0.7,rot,0); ctx.fill();
+        const ca=Math.cos(rot), sa=Math.sin(rot), bx=R*0.48;
+        const b=({x:L.x+bx*ca, y:L.y+bx*sa});
+        p3Box(b.x,b.y,R*0.46,R*0.36,rot,0,R*0.5,n?'#5a3a2a':'#b06a44',n?'#3e281c':'#8a5334',true);
+        break; }
+      case 'stadium': {
+        ctx.globalAlpha=0.32; ctx.fillStyle='#000'; ctx.beginPath(); p3Ellipse(L.x,L.y,R*1.18,R*0.94,rot,0,20); ctx.fill(); ctx.globalAlpha=1;
+        // seating bowl as an extruded oval wall, segments emitted far-to-near so the near side covers the far side
+        const N=22, HT=R*0.42, segs=[];
+        for(let i=0;i<N;i++){ const a0=i/N*Math.PI*2, a1=(i+1)/N*Math.PI*2;
+          const x0=L.x+Math.cos(a0)*R*1.1, y0=L.y+Math.sin(a0)*R*0.86, x1=L.x+Math.cos(a1)*R*1.1, y1=L.y+Math.sin(a1)*R*0.86;
+          const mx=(x0+x1)*0.5, my=(y0+y1)*0.5;
+          segs.push({x0,y0,x1,y1,d:(mx-P3.cx)*(mx-P3.cx)+(my-P3.cy)*(my-P3.cy)}); }
+        segs.sort((a,b)=>b.d-a.d);
+        ctx.fillStyle=n?'#2a2c38':'#8a8e98'; ctx.beginPath();
+        for(const s of segs){ p3Set(0,s.x0,s.y0,0); p3Set(1,s.x1,s.y1,0); p3Set(2,s.x1,s.y1,HT); p3Set(3,s.x0,s.y0,HT); p3Poly(4); } ctx.fill();
+        ctx.fillStyle=n?'#3a3d4a':'#b0b4be'; ctx.beginPath(); p3Ellipse(L.x,L.y,R*1.1,R*0.86,rot,HT,20); ctx.fill();       // rim walkway
+        ctx.fillStyle=n?'#232634':'#6a6e78'; ctx.beginPath(); p3Ellipse(L.x,L.y,R*0.9,R*0.7,rot,HT-4,20); ctx.fill();
+        for(let i=0;i<4;i++){ const a=Math.PI/4+i*Math.PI/2, lx=L.x+Math.cos(a)*R*1.06, ly=L.y+Math.sin(a)*R*0.84;   // floodlight pylons
+          p3Box(lx,ly,R*0.03,R*0.03,0,0,HT*1.9,'#6a6a72','#8a8a92',false);
+          p3(lx,ly,HT*1.95); if(p3s>0){ ctx.fillStyle=n?'#fff8d0':'#eef0f4'; ctx.beginPath(); ctx.ellipse(p3x,p3y,Math.max(1,R*0.09*p3s),Math.max(0.8,R*0.05*p3s),0,0,7); ctx.fill();
+            if(n){ ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=0.35; ctx.fillStyle='#fff8d0'; ctx.beginPath(); ctx.arc(p3x,p3y,Math.max(2,R*0.16*p3s),0,7); ctx.fill(); ctx.restore(); } } }
+        break; }
+      case 'pyramid': {
+        // a real four-sided pyramid: base diamond on the ground, apex overhead, faces sorted far-to-near
+        const h=R*0.5, HT=R*0.46, b=[[-h,0],[0,-h],[h,0],[0,h]];
+        const shade=n?['#5a4a34','#4a3c2a','#33291d','#40331f']:['#f2dca0','#e4c886','#c29a5e','#b0894f'];
+        const faces=[];
+        for(let i=0;i<4;i++){ const a=b[i], c=b[(i+1)%4], mx=L.x+(a[0]+c[0])*0.5, my=L.y+(a[1]+c[1])*0.5;
+          faces.push({i,ax:L.x+a[0],ay:L.y+a[1],cx:L.x+c[0],cy:L.y+c[1],d:(mx-P3.cx)*(mx-P3.cx)+(my-P3.cy)*(my-P3.cy)}); }
+        faces.sort((p,q)=>q.d-p.d);
+        for(const fc of faces){ ctx.fillStyle=shade[fc.i]; ctx.beginPath();
+          p3Set(0,fc.ax,fc.ay,0); p3Set(1,fc.cx,fc.cy,0); p3Set(2,L.x,L.y,HT); p3Poly(3); ctx.fill(); }
+        break; }
+      case 'sphinx': {
+        // Stacked masses rather than one slab: low haunches, a raised chest, outstretched paws and a head sitting
+        // clear on top. One box the size of the whole monument just read as a sand-coloured wall beside the road.
+        const bw=R*0.34, bl=R*0.78;
+        const sand=n?'#7a674a':'#dcc084', sand2=n?'#6a583d':'#cbad72', lit=n?'#8a7452':'#e6cf96';
+        const ca=Math.cos(rot), sa=Math.sin(rot), at=(ox,oy)=>({x:L.x+ox*ca-oy*sa, y:L.y+ox*sa+oy*ca});
+        const paw=at(0,-bl*0.74); p3Box(paw.x,paw.y,bw*0.60,bl*0.26,rot,0,bw*0.26,sand2,sand,true);        // outstretched forepaws
+        p3Box(L.x,L.y,bw*0.62,bl*0.5,rot,0,bw*0.52,sand2,sand,true);                                       // haunches / body
+        const ch=at(0,-bl*0.30); p3Box(ch.x,ch.y,bw*0.54,bl*0.22,rot,0,bw*0.92,sand2,lit,true);            // raised chest
+        const hd=at(0,-bl*0.34); p3Box(hd.x,hd.y,bw*0.46,bw*0.36,rot,bw*0.92,bw*1.46,lit,n?'#9a8460':'#f0dca8',true);   // head + nemes headdress
+        break; }
+    }
+  }
+  // Upright billboard: anchor a chunk of the existing flat art on the ground and let perspective scale it.
+  function p3Billboard(wx,wy,art,k){
+    const f=p3(wx,wy,0); if(p3s<=0)return;
+    const s=p3s*(k||1); if(s<0.02)return;
+    ctx.save(); ctx.translate(p3x,p3y); ctx.scale(s,s); art(); ctx.restore();
+  }
+  // Roadside crowd seen from a car: a low barrier with people packed behind it, heads and shoulders showing.
+  // (The flat renderer's grandstand DECK is a top-down read — as an upright billboard it just looked like a signboard.)
+  function p3CrowdArt(cl){
+    const now=performance.now(), oc=OUTFIT[TH().crowd]||OUTFIT.hood, N=cl.n, SPC=13, HALF2=N*SPC*0.5+7;
+    for(let oi=0;oi<oc.length;oi++){ let any=false; ctx.beginPath();               // torsos, grouped by outfit colour
+      for(let s=0;s<N;s++){ const seed=(s*7+((cl.ph*11)|0)); if((seed*3)%oc.length!==oi)continue; any=true;
+        const gx=(s-(N-1)/2)*SPC+((s*5)%4-1.5), yy=-11+Math.sin(now*0.006+cl.ph+s*1.3)*1.4;
+        roundRect(gx-3.2,yy-9,6.4,11,2); }
+      if(any){ ctx.fillStyle=oc[oi]; ctx.fill(); } }
+    for(let si=0;si<SKIN.length;si++){ let any=false; ctx.beginPath();             // heads, grouped by skin tone
+      for(let s=0;s<N;s++){ const seed=(s*7+((cl.ph*11)|0)); if(seed%SKIN.length!==si)continue; any=true;
+        const gx=(s-(N-1)/2)*SPC+((s*5)%4-1.5), yy=-11+Math.sin(now*0.006+cl.ph+s*1.3)*1.4;
+        ctx.moveTo(gx+3,yy-12); ctx.arc(gx,yy-12,3,0,7); }
+      if(any){ ctx.fillStyle=SKIN[si]; ctx.fill(); } }
+    ctx.fillStyle=night?'rgba(16,12,34,0.95)':'rgba(38,28,62,0.94)'; ctx.fillRect(-HALF2,-9,HALF2*2,10);   // barrier in front of them
+    ctx.fillStyle=night?'rgba(76,224,224,.55)':'rgba(201,168,76,.65)'; ctx.fillRect(-HALF2,-9.8,HALF2*2,1.8);
+  }
+  function p3DecoArt(d){
+    const now=performance.now();
+    if(d.k==='palm'){ ctx.fillStyle='#6b4a28'; ctx.fillRect(-2.5,-26,5,26);
+      const sway=Math.sin(now*0.002+d.ph)*0.18; ctx.fillStyle=night?'#2c5e2b':'#3f8a3a';
+      for(let f=0;f<7;f++){ ctx.save(); ctx.translate(0,-30); ctx.rotate(f/7*Math.PI*2+sway); ctx.beginPath(); ctx.ellipse(0,-10,5,11,0,0,7); ctx.fill(); ctx.restore(); } }
+    else if(d.k==='obelisk'){ ctx.fillStyle=night?'#8a7452':'#d8ba7e'; ctx.fillRect(-5,-30,10,30);
+      ctx.fillStyle=night?'#7a6544':'#c2a067'; ctx.beginPath(); ctx.moveTo(-5,-30);ctx.lineTo(0,-42);ctx.lineTo(5,-30);ctx.closePath(); ctx.fill(); }
+    else if(d.k==='tree'){ ctx.fillStyle='#4a3520'; ctx.fillRect(-2.5,-14,5,14);
+      ctx.fillStyle=night?'#234f2c':'#2f6b3a'; ctx.beginPath(); ctx.arc(0,-22,13,0,7); ctx.fill();
+      ctx.fillStyle=night?'#2e5f38':'#3f8048'; ctx.beginPath(); ctx.arc(-3,-26,8,0,7); ctx.fill(); }
+    else { ctx.fillStyle='#5a5a66'; ctx.fillRect(-1.5,-22,3,22); ctx.fillStyle='#c43b3b'; ctx.fillRect(-4,-25,8,3); }
+  }
+  function p3LampArt(L){
+    ctx.strokeStyle=night?'#43464f':'#7c7f89'; ctx.lineWidth=1.6; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(0,-58); ctx.quadraticCurveTo(0,-64,10,-64); ctx.stroke();   // slim post with a gooseneck arm over the kerb
+    ctx.fillStyle=night?'#ffe6a6':'#c8ccd6'; ctx.beginPath(); ctx.ellipse(11,-63,3.4,1.9,0,0,7); ctx.fill();
+    if(night){ ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=0.8; ctx.fillStyle='#ffdca0'; ctx.beginPath(); ctx.arc(11,-63,6,0,7); ctx.fill(); ctx.restore(); }
+  }
+  // A car as a box with the top-down sprite mapped onto its roof. Projecting the roof's own axes gives an affine
+  // basis, so the sprite lies on the car properly — foreshortened and rotating with it — instead of floating flat.
+  const CARZ=21;   // roof height in world units — kept low so the body's side walls stay slim from a high chase angle
+  function p3Car(wx,wy,ang,cdef,isPlayer,isCop){
+    const ca=Math.cos(ang), sa=Math.sin(ang);
+    // Body box sized to the PAINTED car, not to the sprite frame. The sprite is 1024px of mostly transparent
+    // padding; at 0.40 the box was longer than the artwork sitting on it, so it stuck out front and back and read
+    // as a separate black crate under the car. 0.30 matches the visible bodywork.
+    const L=1024*cdef.s*CARSCALE*0.30, Wd=L*0.44;   // half-length / half-width of the body box in world units
+    const fx=ca*L, fy=sa*L, rx=-sa*Wd, ry=ca*Wd;
+    // SUSPENSION PITCH. car.pitch is already solved by the physics (>0 nose-dives on the brakes, <0 squats under
+    // power). Here it becomes real geometry: the nose lifts and the tail drops, so the car visibly sits back as it
+    // launches and noses down when you stand on the brakes.
+    const pit=isPlayer?Math.max(-1,Math.min(1,car.pitch||0)):0;
+    const zF=CARZ-pit*8, zR=CARZ+pit*8;   // front / rear roof height
+    // CONTACT SHADOW — a broad soft patch to seat the car in the scene plus a tight dark core right under the body.
+    // The tight core is what stops it reading as though it's hovering a foot above the tarmac.
+    ctx.fillStyle='#000';
+    ctx.globalAlpha=0.12; ctx.beginPath();
+    p3Quad(wx+fx*1.16+rx*1.32,wy+fy*1.16+ry*1.32, wx+fx*1.16-rx*1.32,wy+fy*1.16-ry*1.32,
+           wx-fx*1.16-rx*1.32,wy-fy*1.16-ry*1.32, wx-fx*1.16+rx*1.32,wy-fy*1.16+ry*1.32, 0); ctx.fill();
+    ctx.globalAlpha=0.40; ctx.beginPath();
+    p3Quad(wx+fx*0.82+rx*0.86,wy+fy*0.82+ry*0.86, wx+fx*0.82-rx*0.86,wy+fy*0.82-ry*0.86,
+           wx-fx*0.82-rx*0.86,wy-fy*0.82-ry*0.86, wx-fx*0.82+rx*0.86,wy-fy*0.82+ry*0.86, 0.2); ctx.fill();
+    ctx.globalAlpha=1;
+    // dark body sides so the car has volume rather than reading as a decal — roof corners carry the pitch
+    const c0x=wx+fx+rx, c0y=wy+fy+ry, c1x=wx+fx-rx, c1y=wy+fy-ry, c2x=wx-fx-rx, c2y=wy-fy-ry, c3x=wx-fx+rx, c3y=wy-fy+ry;
+    ctx.fillStyle=isCop?'#08080d':'#0a0a10';
+    ctx.beginPath();
+    p3Set(0,c0x,c0y,0); p3Set(1,c1x,c1y,0); p3Set(2,c1x,c1y,zF); p3Set(3,c0x,c0y,zF); p3Poly(4);   // nose
+    p3Set(0,c1x,c1y,0); p3Set(1,c2x,c2y,0); p3Set(2,c2x,c2y,zR); p3Set(3,c1x,c1y,zF); p3Poly(4);   // flank
+    p3Set(0,c2x,c2y,0); p3Set(1,c3x,c3y,0); p3Set(2,c3x,c3y,zR); p3Set(3,c2x,c2y,zR); p3Poly(4);   // tail
+    p3Set(0,c3x,c3y,0); p3Set(1,c0x,c0y,0); p3Set(2,c0x,c0y,zF); p3Set(3,c3x,c3y,zR); p3Poly(4);   // flank
+    ctx.fill();
+    // roof sprite via a projected affine basis (centre + forward + right, all at roof height)
+    const img=isCop?CARIMG['ct6']:carSprite(cdef);
+    if(spriteReady(img)){
+      // The roof sprite is mapped through a projected AFFINE BASIS: project the roof centre, then a point one probe
+      // length forward and one to the right. Those two screen deltas are the sprite's x/y axes, so the art lies on
+      // the car's actual roof plane — foreshortened by the same perspective as the road under it.
+      // Probing the FORWARD axis at the pitched nose height (zF) rather than flat tilts the whole mapped plane, so
+      // the artwork leans back with the body on power instead of staying pasted flat while the box moves under it.
+      const f0=p3(wx,wy,CARZ); if(p3s<=0)return; const Cx=p3x,Cy=p3y;
+      p3(wx+ca*L,wy+sa*L,zF); if(p3s<=0)return; const Fx=(p3x-Cx)/L, Fy=(p3y-Cy)/L;   // screen delta per world unit forward
+      p3(wx-sa*L,wy+ca*L,CARZ); if(p3s<=0)return; const Rx=(p3x-Cx)/L, Ry=(p3y-Cy)/L;   // ... per world unit right
+      // sprite art is nose-UP, so sprite +x is world-right and sprite +y is world-BACKWARD
+      const w=1024*cdef.s*CARSCALE;
+      ctx.save();
+      ctx.setTransform(DPR*Rx,DPR*Ry,-DPR*Fx,-DPR*Fy,DPR*Cx,DPR*Cy);
+      ctx.drawImage(img,-w/2,-w/2,w,w);
+      ctx.setTransform(DPR,0,0,DPR,0,0);
+      ctx.restore();
+    }
+    // ── REAR END ──────────────────────────────────────────────────────────────────────────────────────────────
+    // The top-down sprite is a ROOF view, so from a chase camera the back of the car was a flat black slab with no
+    // tail lights on it — nothing to read when a rival brakes in front of you. This builds an actual rear face on
+    // the body box: panel, light clusters, bumper. Applies to rivals and cops too, so a pack ahead of you reads as
+    // a wall of red rather than anonymous shapes.
+    { const mx=(c2x+c3x)*0.5, my=(c2y+c3y)*0.5;
+      if((mx-P3.cx)*(mx-wx)+(my-P3.cy)*(my-wy)<0){   // only when the tail actually faces the lens
+        // quad on the rear face, in (across, up) fractions
+        const rf=(u0,u1,t0,t1)=>{ const ax=c2x+(c3x-c2x)*u0, ay=c2y+(c3y-c2y)*u0, bx=c2x+(c3x-c2x)*u1, by=c2y+(c3y-c2y)*u1;
+          p3Set(0,ax,ay,zR*t0); p3Set(1,bx,by,zR*t0); p3Set(2,bx,by,zR*t1); p3Set(3,ax,ay,zR*t1); p3Poly(4); };
+        const braking=isPlayer?K.brake:false;
+        ctx.fillStyle=isCop?'#101018':'#15121e'; ctx.beginPath(); rf(0,1,0,1); ctx.fill();            // rear panel, lifted off pure black so it reads
+        ctx.fillStyle='#2a2632'; ctx.beginPath(); rf(0.02,0.98,0,0.20); ctx.fill();                    // bumper
+        const lampCol=isCop?'#2f6bff':(braking?'#ff3020':'#c22018'), lampA=braking?1:0.82;
+        ctx.globalAlpha=lampA; ctx.fillStyle=lampCol;
+        ctx.beginPath(); rf(0.09,0.39,0.34,0.82); rf(0.61,0.91,0.34,0.82); ctx.fill();                 // tail-light clusters — tall on the face so they stay readable from a high angle
+        ctx.globalAlpha=1;
+        ctx.fillStyle=night?'#f4ecd8':'#8a8494'; ctx.beginPath(); rf(0.44,0.56,0.24,0.36); ctx.fill(); // plate
+        // additive bloom so the lamps actually glow — much stronger on the brakes
+        ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=braking?0.85:(night?0.5:0.3);
+        ctx.fillStyle=isCop?'#4f8bff':'#ff4030';
+        ctx.beginPath(); rf(0.06,0.42,0.34,0.78); rf(0.58,0.94,0.34,0.78); ctx.fill();
+        if(braking){ p3(wx-ca*L*1.05,wy-sa*L*1.05,zR*0.55);   // pool of red thrown back onto the tarmac
+          if(p3s>0){ ctx.globalAlpha=0.5; ctx.fillStyle='#ff2a2a'; ctx.beginPath(); ctx.ellipse(p3x,p3y,Math.max(2,Wd*1.5*p3s),Math.max(1,7*p3s),0,0,7); ctx.fill(); } }
+        ctx.restore(); ctx.globalAlpha=1; } }
+  }
+
   function draw(){
     ctx.clearRect(0,0,W,H);
+    if(camMode===0 && TRACK.length){ draw3D(); drawRain(); drawSpeedLines();
+      const vg3=ctx.createRadialGradient(W/2,H*0.46,H*0.34,W/2,H*0.5,H*0.86); vg3.addColorStop(0,'rgba(0,0,0,0)'); vg3.addColorStop(1,night?'rgba(4,2,12,0.5)':'rgba(10,6,20,0.36)'); ctx.fillStyle=vg3; ctx.fillRect(0,0,W,H);
+      postFX(); drawHUD(); return; }
     const _t=TH();
     const bg=ctx.createRadialGradient(W/2,H*0.4,80,W/2,H*0.4,Math.max(W,H));
     bg.addColorStop(0,night?_t.nSkyIn:_t.skyIn); bg.addColorStop(1,night?_t.nSkyOut:_t.skyOut);
@@ -1300,32 +2174,37 @@
       const zm=(camMode===0?0.7:1.0)*(1-vFeel*0.05);   // camPunch zoom-pump REMOVED — was reading as a camera shake / jerk on boost + drift-release. Camera stays rock-steady.
       const _lead=vFeel*105, _lx=car.x+(car.vx/_lv)*_lead, _ly=car.y+(car.vy/_lv)*_lead;   // forward lead so you still see what's coming at the tighter zoom
       ctx.translate(W/2+sx,H/2+sy); ctx.scale(zm,zm); ctx.translate(-_lx,-_ly);
+      CAMX=_lx; CAMY=_ly;
+      const _hw=(W/2)/zm, _hh=(H/2)/zm;   // publish the exact world rect on screen so every layer can cull against it
+      VX0=_lx-_hw; VX1=_lx+_hw; VY0=_ly-_hh; VY1=_ly+_hh;
     }
     drawLandmarks();   // themed set-pieces (pyramids / sphinx / golden gate) — furthest back
     drawProps();
     drawDeco();        // palms / obelisks / trees / cable-car poles along the road
     drawCrowd();   // cheering roadside spectators on the shoulders
     ctx.lineCap='round'; ctx.lineJoin='round';
-    const roadPath=()=>{ ctx.beginPath(); TRACK.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); if(!OPEN)ctx.closePath(); };
     if(WATER)drawWater();   // river under the bridge span (drawn behind the road so the road bridges it)
-    if(night){ ctx.strokeStyle='rgba(76,224,224,0.12)'; ctx.lineWidth=ROAD_W+80; roadPath(); ctx.stroke(); }
-    ctx.strokeStyle=night?_t.nRoad:_t.road; ctx.lineWidth=ROAD_W; roadPath(); ctx.stroke();
-    if(wet&&!lite){ ctx.strokeStyle=night?'rgba(40,70,120,0.14)':'rgba(120,150,190,0.12)'; ctx.lineWidth=ROAD_W; roadPath(); ctx.stroke();   // wet gloss over the whole tarmac
-      ctx.strokeStyle=night?'rgba(76,224,224,0.08)':'rgba(224,85,79,0.07)'; ctx.lineWidth=ROAD_W*0.9; roadPath(); ctx.stroke(); }  // neon reflection bleeding onto wet road
-    if(wet&&!lite){ ctx.save(); ctx.globalCompositeOperation='lighter'; const pn=performance.now();   // PS3 wet reflection STREAKS — neon sheen drifting along the tarmac
-      ctx.strokeStyle=night?'rgba(76,224,224,0.09)':'rgba(150,180,255,0.08)'; ctx.lineWidth=ROAD_W*0.40; ctx.setLineDash([120,540]); ctx.lineDashOffset=(-pn*0.22)%660; roadPath(); ctx.stroke();
-      ctx.strokeStyle=night?'rgba(230,245,255,0.10)':'rgba(255,255,255,0.11)'; ctx.lineWidth=ROAD_W*0.14; ctx.setLineDash([46,880]); ctx.lineDashOffset=(-pn*0.40)%926; roadPath(); ctx.stroke();
+    if(night){ ctx.strokeStyle='rgba(76,224,224,0.12)'; ctx.lineWidth=ROAD_W+80; ctx.stroke(ROADP); }
+    ctx.strokeStyle=night?_t.nRoad:_t.road; ctx.lineWidth=ROAD_W; ctx.stroke(ROADP);
+    // The wet-tarmac treatment is four MORE full-width strokes down the whole road on top of the tarmac itself — the
+    // single most fill-rate-hungry thing in the scene. On a rig that's already dropping frames the governor sheds it;
+    // at 0.07–0.14 alpha it's the layer you'd miss least.
+    const wetFX=wet&&!lite&&PERF.lvl<2;
+    if(wetFX){ ctx.strokeStyle=night?'rgba(40,70,120,0.14)':'rgba(120,150,190,0.12)'; ctx.lineWidth=ROAD_W; ctx.stroke(ROADP);   // wet gloss over the whole tarmac
+      ctx.strokeStyle=night?'rgba(76,224,224,0.08)':'rgba(224,85,79,0.07)'; ctx.lineWidth=ROAD_W*0.9; ctx.stroke(ROADP); }  // neon reflection bleeding onto wet road
+    if(wetFX){ ctx.save(); ctx.globalCompositeOperation='lighter'; const pn=performance.now();   // PS3 wet reflection STREAKS — neon sheen drifting along the tarmac
+      ctx.strokeStyle=night?'rgba(76,224,224,0.09)':'rgba(150,180,255,0.08)'; ctx.lineWidth=ROAD_W*0.40; ctx.setLineDash([120,540]); ctx.lineDashOffset=(-pn*0.22)%660; ctx.stroke(ROADP);
+      ctx.strokeStyle=night?'rgba(230,245,255,0.10)':'rgba(255,255,255,0.11)'; ctx.lineWidth=ROAD_W*0.14; ctx.setLineDash([46,880]); ctx.lineDashOffset=(-pn*0.40)%926; ctx.stroke(ROADP);
       ctx.setLineDash([]); ctx.restore(); }
-    ctx.strokeStyle=night?'rgba(120,150,200,0.05)':'rgba(255,255,255,0.05)'; ctx.lineWidth=ROAD_W*0.55; roadPath(); ctx.stroke();   // asphalt centre sheen
+    ctx.strokeStyle=night?'rgba(120,150,200,0.05)':'rgba(255,255,255,0.05)'; ctx.lineWidth=ROAD_W*0.55; ctx.stroke(ROADP);   // asphalt centre sheen
     if(!lite){   // ── ASPHALT WEAR (FULL): worn racing-line grooves + expansion-joint seams + hairline cracks ──
       ctx.strokeStyle=night?'rgba(0,0,0,0.15)':'rgba(0,0,0,0.09)'; ctx.lineWidth=ROAD_W*0.14; ctx.lineCap='round';   // two darkened bands where tires ride
-      for(const gs of [-1,1]){ ctx.beginPath(); for(let i=0;i<TRACK.length;i++){ const p=TRACK[i],n=NRM[i], x=p.x+n.x*ROAD_W*0.19*gs, y=p.y+n.y*ROAD_W*0.19*gs; i?ctx.lineTo(x,y):ctx.moveTo(x,y); } if(!OPEN)ctx.closePath(); ctx.stroke(); }
-      ctx.strokeStyle=night?'rgba(0,0,0,0.26)':'rgba(30,30,38,0.20)'; ctx.lineWidth=1.6;   // expansion-joint seams across the road
-      for(let i=6;i<TRACK.length;i+=12){ const p=TRACK[i],n=NRM[i]; ctx.beginPath(); ctx.moveTo(p.x-n.x*ROAD_W*0.5,p.y-n.y*ROAD_W*0.5); ctx.lineTo(p.x+n.x*ROAD_W*0.5,p.y+n.y*ROAD_W*0.5); ctx.stroke(); }
+      ctx.stroke(GROOVEP);
+      ctx.strokeStyle=night?'rgba(0,0,0,0.26)':'rgba(30,30,38,0.20)'; ctx.lineWidth=1.6; ctx.stroke(SEAMP);   // expansion-joint seams across the road
       drawCracks();
     }
     drawPuddles();
-    ctx.strokeStyle=_t.lane; ctx.lineWidth=4; ctx.setLineDash([30,46]); roadPath(); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle=_t.lane; ctx.lineWidth=4; ctx.setLineDash([30,46]); ctx.stroke(ROADP); ctx.setLineDash([]);
     drawBorders();
     drawLamps();   // roadside streetlights + warm night light-pools on the tarmac
     for(const s of skid){ ctx.globalAlpha=s.a*0.6; ctx.fillStyle='#08080d'; ctx.beginPath(); ctx.arc(s.x,s.y,6,0,7); ctx.fill(); } ctx.globalAlpha=1;
@@ -1366,13 +2245,20 @@
     drawHUD();
   }
   // PS3 HD ARCADE post-processing — additive bloom + radial zoom-blur on boost. Gated to !lite so LITE stays lean.
-  let _bloomCv=null,_bloomX=null;
-  function postFX(){ if(lite)return;
+  let _bloomCv=null,_bloomX=null,_bloomAge=99;
+  function postFX(){ if(lite||!PERF_BLOOM)return;
     if(!_bloomCv){ _bloomCv=document.createElement('canvas'); _bloomX=_bloomCv.getContext('2d'); }
-    const bw=Math.max(1,cv.width>>1), bh=Math.max(1,cv.height>>1);
-    if(_bloomCv.width!==bw||_bloomCv.height!==bh){ _bloomCv.width=bw; _bloomCv.height=bh; }
-    _bloomX.setTransform(1,0,0,1,0,0); _bloomX.globalAlpha=1; _bloomX.globalCompositeOperation='source-over'; _bloomX.clearRect(0,0,bw,bh);
-    _bloomX.filter='blur('+(photo?6:4)+'px)'; _bloomX.drawImage(cv,0,0,bw,bh); _bloomX.filter='none';
+    // QUARTER-res bloom buffer (was half). A canvas blur() filter is a full-screen readback + convolution and it was
+    // the single spikiest thing in the frame — dropping to 1/4 res cuts that surface by 4× and the bloom is so soft
+    // nothing about it reads differently on screen.
+    const bw=Math.max(1,cv.width>>2), bh=Math.max(1,cv.height>>2);
+    if(_bloomCv.width!==bw||_bloomCv.height!==bh){ _bloomCv.width=bw; _bloomCv.height=bh; _bloomAge=99; }
+    // Refresh the bloom every other frame and reuse it in between — a soft glow lagging one frame is invisible,
+    // and it halves the cost of the most expensive operation in the renderer.
+    const boosting=running&&(car.boostT>0||(car.hyperT||0)>0);
+    if(boosting || ++_bloomAge>=2){ _bloomAge=0;
+      _bloomX.setTransform(1,0,0,1,0,0); _bloomX.globalAlpha=1; _bloomX.globalCompositeOperation='source-over'; _bloomX.clearRect(0,0,bw,bh);
+      _bloomX.filter='blur('+(photo?3:2)+'px)'; _bloomX.drawImage(cv,0,0,bw,bh); _bloomX.filter='none'; }
     ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=photo?0.46:0.34; ctx.drawImage(_bloomCv,0,0,W,H);
     if(running&&(car.boostT>0||(car.hyperT||0)>0)){ const k=Math.min(1,Math.max(car.boostT,car.hyperT||0));   // radial zoom-blur on the M24.9e surge
       for(let s=1;s<=3;s++){ const sc=1+s*0.04*k, ox=W/2*(1-sc), oy=H/2*(1-sc); ctx.globalAlpha=(0.2*k)/s; ctx.setTransform(DPR*sc,0,0,DPR*sc,DPR*ox,DPR*oy); ctx.drawImage(_bloomCv,0,0,W,H); } }
@@ -1783,7 +2669,26 @@
   document.getElementById('toGarage2').onclick=()=>{ winPop.classList.add('hidden'); running=false; muteBtn.classList.add('hidden'); musicBtn.classList.add('hidden'); document.getElementById('garage').classList.remove('hidden'); renderGarage(); playMenuMusic(); };
 
   let last=0;
-  function loop(now){ if(!running)return; now=now||performance.now(); let dt=(now-last)/1000; last=now; if(dt>0.05)dt=0.05; if(!paused)step(dt); draw(); requestAnimationFrame(loop); }
+  // ===== ADAPTIVE PERFORMANCE GOVERNOR =====
+  // The renderer can't know what it's running on — a gaming desktop and a 2017 ultrabook both load this page. Rather
+  // than pick one fixed quality and let the weak rig stutter, watch the ACTUAL delivered frame interval and give back
+  // the most expensive effects, cheapest-looking-first, until the frame rate is steady. It climbs back up when there's
+  // headroom again. Deliberately slow to react (≈1s windows + a cooldown) so it settles instead of oscillating.
+  const PERF={lvl:0,acc:0,n:0,cd:0};
+  let PERF_BLOOM=true, PERF_LOD=1;
+  function applyPerf(){ const L=PERF.lvl;
+    PERF_BLOOM = L<1;                                   // 1: drop the full-screen bloom pass
+    PERF_LOD   = L>=3?0.60:(L>=2?0.78:1);               // 2+: pull the detail radii in (fewer windowed facades / full crowd rigs)
+    const want = L>=3?1:1.5;                            // 3: render at 1× instead of 1.5× — the last and biggest lever
+    if(DPRCAP!==want){ DPRCAP=want; resize(); } }
+  function perfSample(gap){ if(paused||!running||gap<=0||gap>500)return;   // ignore alt-tab / debugger stalls
+    PERF.acc+=gap; if(++PERF.n<50)return;
+    const avg=PERF.acc/PERF.n; PERF.acc=0; PERF.n=0;
+    if(PERF.cd>0){ PERF.cd--; return; }
+    if(avg>21.5 && PERF.lvl<3){ PERF.lvl++; applyPerf(); PERF.cd=2; }        // slower than ~46fps → shed an effect
+    else if(avg<13.0 && PERF.lvl>0){ PERF.lvl--; applyPerf(); PERF.cd=5; }   // comfortably above 75fps → take one back
+  }
+  function loop(now){ if(!running)return; now=now||performance.now(); let dt=(now-last)/1000; perfSample(now-last); last=now; if(dt>0.05)dt=0.05; if(!paused)step(dt); draw(); requestAnimationFrame(loop); }
   // ── Auto-pause when the tab is hidden or a CrazyGames ad takes over (saves CPU/battery on low-end rigs; stops the car freezing mid-crash on alt-tab) ──
   let autoPaused=false;
   function autoHide(){ if(!running||paused)return; autoPaused=true; paused=true; musicPause(true); try{ if(AUD.ctx&&AUD.ctx.state==='running')AUD.ctx.suspend(); }catch(e){} CG.stop(); }
@@ -1841,7 +2746,8 @@
     midgame(done){ try{ if(CG.ok&&CG.s.ad){ CG.s.ad.requestAd('midgame',{adFinished:()=>done&&done(),adError:()=>done&&done()}); } else if(done)done(); }catch(e){ if(done)done(); } } };   // between-race ad only (never during a race, per CrazyGames rules)
   CG.init();
 
-  function startWith(dk){ document.getElementById('menu').classList.add('hidden'); document.getElementById('garage').classList.add('hidden'); buildTrack(dk); initAudio(); resumeAudio(); startEngine(); startScreech(); muteBtn.classList.remove('hidden'); musicBtn.classList.remove('hidden'); pauseBtn.classList.remove('hidden'); if(camBtn)camBtn.classList.remove('hidden'); paused=false; initRace(); running=true; last=performance.now(); loop(); CG.start(); playRaceMusic();   // fire gameplayStart BEFORE streaming race music, so the heavy tracks don't count toward the CrazyGames initial-download budget
+  function startWith(dk){ document.getElementById('menu').classList.add('hidden'); document.getElementById('garage').classList.add('hidden'); buildTrack(dk); initAudio(); resumeAudio(); startEngine(); startScreech(); muteBtn.classList.remove('hidden'); musicBtn.classList.remove('hidden'); pauseBtn.classList.remove('hidden'); if(camBtn)camBtn.classList.remove('hidden'); paused=false; initRace(); running=true; last=performance.now(); loop(); CG.start();
+    setTimeout(playRaceMusic,0);   // hand the first frames to the renderer, THEN kick off music streaming — starting the fetch inline stalled the opening frames of every race
     // FIRST-LAUNCH onboarding — visual control hints over the countdown, skippable, shown once. Not in demo.
     if(!DEMO){ let seen=false; try{ seen=!!localStorage.getItem('qm_onboard_seen'); }catch(e){} if(!seen){ document.getElementById('onboard').classList.remove('hidden'); paused=true; } } }
   { const obEl=document.getElementById('onboard');
