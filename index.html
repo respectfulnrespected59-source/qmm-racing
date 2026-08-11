@@ -119,16 +119,16 @@
 
   <div id="touch">
     <div id="joyBase"><div id="joyKnob"></div></div>
-    <div class="tbtn" id="tBrake">BRAKE</div><div class="tbtn" id="tDrift">DRIFT</div><div class="tbtn" id="tBoost">M24.9e</div>
+    <div class="tbtn" id="tBrake">BRAKE</div><div class="tbtn" id="tDrift">DRIFT</div><div class="tbtn" id="tBoost">QUANTUM</div>
   </div>
 
   <div class="overlay" id="menu">
     <div class="title">QUANTUM<br>MOTORS<small>M24.9e · QMM RACING</small></div>
     <p class="sub">Drift the blacked-out Quantum Motors muscle car through the Activated Melanin Hood.
-      Charge <b style="color:var(--cyan)">M24.9e</b> in the slides, burn it for a glowing surge, and beat the pack to the line.
+      Charge <b style="color:var(--cyan)">QUANTUM</b> in the slides, burn it for a glowing surge, and beat the pack to the line.
       At <b style="color:var(--gold)">night</b> the hood activates — payouts double.</p>
     <div class="keys">
-      <b>◄ ►</b> steer &nbsp;·&nbsp; <b>SPACE</b> drift &nbsp;·&nbsp; <b>↓</b> brake &nbsp;·&nbsp; <b>SHIFT</b> burn M24.9e &nbsp;·&nbsp; <b>H</b> cops &nbsp;·&nbsp; <b>T</b> turn guide &nbsp;·&nbsp; <b>L</b> lite/full &nbsp;·&nbsp; <b>J</b> next song &nbsp;·&nbsp; <b>B</b> music &nbsp;·&nbsp; <b>N</b> night &nbsp;·&nbsp; <b>W</b> wet &nbsp;·&nbsp; <b>P</b> pause &nbsp;·&nbsp; <b>M</b> mute
+      <b>◄ ►</b> steer &nbsp;·&nbsp; <b>SPACE</b> drift &nbsp;·&nbsp; <b>↓</b> brake &nbsp;·&nbsp; <b>SHIFT</b> burn QUANTUM &nbsp;·&nbsp; <b>H</b> cops &nbsp;·&nbsp; <b>T</b> turn guide &nbsp;·&nbsp; <b>L</b> lite/full &nbsp;·&nbsp; <b>J</b> next song &nbsp;·&nbsp; <b>B</b> music &nbsp;·&nbsp; <b>N</b> night &nbsp;·&nbsp; <b>W</b> wet &nbsp;·&nbsp; <b>P</b> pause &nbsp;·&nbsp; <b>M</b> mute
     </div>
     <button class="btn" id="quickRace" style="background:#C9A84C;color:#0B0713;border-color:#C9A84C;font-weight:900;margin-bottom:10px">▶ QUICK RACE</button>
     <button class="btn" id="toGarage">ENTER THE GARAGE →</button>
@@ -190,8 +190,8 @@
     <div class="kicker">🏁 HOW TO RIDE 🏁</div>
     <div class="obGrid">
       <div class="obKey"><b>◄ ►</b><span>STEER</span></div>
-      <div class="obKey"><b>SPACE</b><span>DRIFT<br>charge M24.9e</span></div>
-      <div class="obKey"><b>SHIFT</b><span>BURN M24.9e<br>(boost)</span></div>
+      <div class="obKey"><b>SPACE</b><span>DRIFT<br>charge QUANTUM</span></div>
+      <div class="obKey"><b>SHIFT</b><span>BURN QUANTUM<br>(boost)</span></div>
       <div class="obKey"><b>↓</b><span>BRAKE</span></div>
     </div>
     <div class="obTip">Tap (or hold) SPACE to drift the corners → charges your gold bar, then burn it with SHIFT on the straights. Bang doors with rivals to steal position. On mobile, steer with the on-screen joystick.</div>
@@ -686,7 +686,7 @@
   //         2=CLOSE (mid top-down). The two top-down modes share the old flat renderer; CHASE uses draw3D().
   // camAng = the heading the chase camera trails, eased toward the direction of TRAVEL (not the body angle) so a drift
   // reads as the car stepping sideways across the screen instead of the whole city snapping round with the nose.
-  let camMode=0, camAng=0;
+  let camMode=1, camAng=0;   // BIRDS-EYE is the shipping default — CHASE (0) is still WIP, so it's opt-in via C / 🎥 rather than what a first-time player lands in
   const CAMNAMES=['CHASE','BIRDS-EYE','CLOSE'];
   // ── CHASE CAMERA RIG (dialled in by eye at speed, then baked) ──
   //   CAM_H    — lens height above the tarmac. CAM_H/CAM_BACK is the ANGLE: 0.65 here, so it keeps the elevated,
@@ -697,7 +697,7 @@
   //              car stays planted at this spot regardless of window size or the other two values.
   const CAM_H=400, CAM_BACK=545, CAM_CARY=0.80;   // ratio 0.73 — back up high so you look down onto the roof rather than at the body's side walls; the rear face is still angled toward you enough to read its lights
   let CAMX=0, CAMY=0;   // world point at the centre of the screen — top-down parallax + culling key off THIS, not the car
-  try{ const _cm=localStorage.getItem('qmCam3'); if(_cm!=null){ const v=parseInt(_cm,10); if(v>=0&&v<=2)camMode=v; } }catch(e){}   // fresh key so the chase view lands as the default once
+  try{ const _cm=localStorage.getItem('qmCam3'); if(_cm!=null){ const v=parseInt(_cm,10); if(v>=0&&v<=2)camMode=v; } }catch(e){}   // a returning player's saved choice still wins over the default above
   function cycleCam(){ camMode=(camMode+1)%3; try{localStorage.setItem('qmCam3',camMode);}catch(e){} const nm=CAMNAMES[camMode]; raceMsg='📷 CAM: '+nm; raceMsgT=1.3; const cb=document.getElementById('camBtn'); if(cb)cb.title='Camera: '+nm+' (C)'; }   // shared by the C key + the 🎥 button
   function ring(x,y,col,sp){ if(rings.length>=22)rings.shift(); rings.push({x,y,r:20,a:0.85,col,sp:sp||520}); }   // BOUNDED (22 max) — cheap stroked-arc shockwave
   const rain=[]; let rainLast=0;   // screen-space rain streaks (wet mode)
@@ -753,7 +753,7 @@
   });
   window.addEventListener('keyup',e=>{ keys[e.code]=false; });
   const T={left:false,right:false,drift:false,boost:false,brake:false,steerAxis:0,joy:false};
-  // SCHEME: SPACE = drift (hold, manual · full control) · SHIFT = burn M24.9e boost · ↓/S = brake. (accelerator is automatic)
+  // SCHEME: SPACE = drift (hold, manual · full control) · SHIFT = burn QUANTUM boost · ↓/S = brake. (accelerator is automatic)
   function readKeys(){ K.left=keys['ArrowLeft']||keys['KeyA']||T.left; K.right=keys['ArrowRight']||keys['KeyD']||T.right; K.boost=keys['ShiftLeft']||keys['ShiftRight']||T.boost; K.brake=keys['ArrowDown']||keys['KeyS']||T.brake;
     // Edge-detect the throttle here rather than in the key handler so the on-screen touch button double-taps too.
     const gasHeld=keys['Space']||T.drift;
@@ -955,7 +955,7 @@
     screechUpdate(car.drifting||hardCorner, Math.abs(vR)+(hardCorner?120:0));   // ONLY on real slides (e-brake drift or hard high-speed slip) — no more screech on every little turn
 
     const slip=Math.abs(vR);
-    // Meter gates widened (slip 60→45, spd 165→130) to match the driftCharge gate below, so the M24.9e bar fills
+    // Meter gates widened (slip 60→45, spd 165→130) to match the driftCharge gate below, so the QUANTUM bar fills
     // from drift ENTRY and keeps filling through apex and exit for the whole held SPACE — the "build up boost" half
     // of the ask. Boost is still spent manually with SHIFT; nothing auto-fires.
     if(car.drifting&&slip>45&&spd>130){ car.m=Math.min(100,car.m+(slip/900)*dt*38*(night?2:1));
@@ -970,7 +970,7 @@
     if(car._wasDrift&&!car.drifting){ const tier=dTier;
       if(tier>0){ car.exitT=0.6;                                                                  // EXIT = pure grip-recovery window. NO auto-boost, NO velocity kick, NO top-speed surge — traction just eases loose→full over ~0.6s (see grip line above) so you smoothly REGAIN CONTROL and carry your own momentum out of the slide. No speed lurch, no drag.
         car.clean=(car.clean||0)+tier*0.7;
-        car.m=Math.min(100,car.m+tier*5); shake=Math.max(shake,1+tier);                           // the slide still FILLS the M24.9e meter — you burn it MANUALLY with SHIFT; it never fires itself
+        car.m=Math.min(100,car.m+tier*5); shake=Math.max(shake,1+tier);                           // the slide still FILLS the QUANTUM meter — you burn it MANUALLY with SHIFT; it never fires itself
         beep([0,320,240,170][tier],0.20,'sawtooth',0.16,[0,700,860,1050][tier]);                  // soft tire-chirp on regrip (no turbo whoosh)
         for(let i=0;i<(lite?tier*4:tier*6);i++)sparks.push({x:car.x,y:car.y,vx:(Math.random()-.5)*180,vy:(Math.random()-.5)*180,a:1,r:2+Math.random()*3,col:tier===3?COL.cyan:COL.gold});
         // DRIFT CHAIN — back-to-back clean drifts (within ~4s) multiply the SCORE payout (points only, not speed)
@@ -997,7 +997,7 @@
         if(!lite)trail.push({x:car.x-fx*(P.back+16)+sx*P.side*s+(Math.random()-.5)*9,   // longer, livelier tail behind each pipe
                              y:car.y-fy*(P.back+16)+sy*P.side*s+(Math.random()-.5)*9, z:P.z, r:11, a:0.65, rot:car.a}); }
       if(Math.random()<0.5)sparks.push({x:car.x,y:car.y,vx:(Math.random()-.5)*160,vy:(Math.random()-.5)*160,a:1,r:2+Math.random()*3}); }
-    // ===== BOOST CAPSULES — drive through one for a HYPER surge (also tops up M24.9e). Respawn on a cooldown. =====
+    // ===== BOOST CAPSULES — drive through one for a HYPER surge (also tops up QUANTUM). Respawn on a cooldown. =====
     if((car.hyperT||0)>0) car.hyperT-=dt;
     for(const bp of boosts){ if(bp.cd>0){ bp.cd-=dt; continue; }
       const dx=car.x-bp.x,dy=car.y-bp.y; if(dx*dx+dy*dy<60*60){
@@ -2116,7 +2116,7 @@
         // along the exhaust axis, so the tongues are built as world-space geometry and projected: perspective then
         // orients and foreshortens them for free, exactly the way it does the road.
         // Colour follows a real flame rather than the old plasma ramp — blue-white at the nozzle where combustion is
-        // hottest, through amber, to a deep red tip as it cools. That keeps the M24.9e cyan signature at the mouth
+        // hottest, through amber, to a deep red tip as it cools. That keeps the QUANTUM cyan signature at the mouth
         // while everything downstream of it actually burns.
         case 'trail': { const p=o.r;
           const _rt=p.rot||0, _ex=Math.cos(_rt), _ey=Math.sin(_rt), _sx=-_ey, _sy=_ex;
@@ -3027,7 +3027,7 @@
         ctx.globalAlpha=p.a*0.22; ctx.fillStyle='#e02808'; tongue(R*1.75*stretch,R*0.86,backX*0.3);    // deep red envelope (stretches most, coolest)
         ctx.globalAlpha=p.a*0.30; ctx.fillStyle='#ff8c14'; tongue(R*1.15*stretch,R*0.58,backX*0.2);    // amber body
         ctx.globalAlpha=p.a*0.42; ctx.fillStyle='#ffe07a'; tongue(R*0.66*stretch,R*0.34,0);            // yellow inner
-        ctx.globalAlpha=p.a*0.58; ctx.fillStyle='#dffbff'; tongue(R*0.32*(1+age*0.5),R*0.19,0);        // blue-white nozzle — hottest point, keeps the M24.9e signature at the mouth
+        ctx.globalAlpha=p.a*0.58; ctx.fillStyle='#dffbff'; tongue(R*0.32*(1+age*0.5),R*0.19,0);        // blue-white nozzle — hottest point, keeps the QUANTUM signature at the mouth
         ctx.restore(); });
       ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=1; }
     sparks.forEach(p=>{ ctx.globalAlpha=p.a; ctx.fillStyle=p.col||COL.gold; ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fill(); }); ctx.globalAlpha=1;
@@ -3040,7 +3040,7 @@
     drawSpeedLines();   // high-speed motion streaks (FULL/PHOTO only)
     // cinematic vignette + subtle colour grade for depth
     const vg=ctx.createRadialGradient(W/2,H*0.46,H*0.32,W/2,H*0.5,H*0.82); vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,night?'rgba(4,2,12,0.55)':'rgba(10,6,20,0.4)'); ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
-    // BOOST edge glow — the screen rim breathes cyan while the M24.9e surge is live (FULL/PHOTO only)
+    // BOOST edge glow — the screen rim breathes cyan while the QUANTUM surge is live (FULL/PHOTO only)
     if(!lite && running && (car.boostT>0||(car.hyperT||0)>0)){ const k=Math.min(1,Math.max(car.boostT,car.hyperT||0));
       const eg=ctx.createRadialGradient(W/2,H/2,H*0.36,W/2,H/2,H*0.78); eg.addColorStop(0,'rgba(76,224,224,0)'); eg.addColorStop(1,'rgba(76,224,224,'+(0.14+0.14*k).toFixed(3)+')');
       ctx.fillStyle=eg; ctx.fillRect(0,0,W,H); }
@@ -3063,7 +3063,7 @@
       _bloomX.setTransform(1,0,0,1,0,0); _bloomX.globalAlpha=1; _bloomX.globalCompositeOperation='source-over'; _bloomX.clearRect(0,0,bw,bh);
       _bloomX.filter='blur('+(photo?3:2)+'px)'; _bloomX.drawImage(cv,0,0,bw,bh); _bloomX.filter='none'; }
     ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=photo?0.46:0.34; ctx.drawImage(_bloomCv,0,0,W,H);
-    if(running&&(car.boostT>0||(car.hyperT||0)>0)){ const k=Math.min(1,Math.max(car.boostT,car.hyperT||0));   // radial zoom-blur on the M24.9e surge
+    if(running&&(car.boostT>0||(car.hyperT||0)>0)){ const k=Math.min(1,Math.max(car.boostT,car.hyperT||0));   // radial zoom-blur on the QUANTUM surge
       for(let s=1;s<=3;s++){ const sc=1+s*0.04*k, ox=W/2*(1-sc), oy=H/2*(1-sc); ctx.globalAlpha=(0.2*k)/s; ctx.setTransform(DPR*sc,0,0,DPR*sc,DPR*ox,DPR*oy); ctx.drawImage(_bloomCv,0,0,W,H); } }
     ctx.restore(); }
   // high-speed motion streaks — radial screen-space speed lines that ramp in past ~320mph (FULL/PHOTO only), cyan on boost. Bounded count.
@@ -3312,7 +3312,7 @@
       const hot=heatStars>=4; ctx.fillStyle=heatStars>0?(hot?'#ff4a4a':COL.orange):'rgba(244,236,216,.45)'; ctx.fillText('🚨 HEAT '+stars,24,128);
       if(cops.some(c=>c.state==='chase')){ ctx.font='800 12px Trebuchet MS'; ctx.fillStyle='#9acd32'; ctx.fillText('ERASER PATROL — juke or wall ’em!',24,146); } }
     ctx.restore();
-    // ===== M24.9e METER — signature HUD: tier ticks · READY pulse · burn-flash + shockwave · fire chevrons · drift-chain badge =====
+    // ===== QUANTUM METER — signature HUD: tier ticks · READY pulse · burn-flash + shockwave · fire chevrons · drift-chain badge =====
     const bw=Math.min(300,W*0.42),bx=(W-bw)/2,by=H-40,bh=18;
     const usable=car.m>=15, full=car.m>=99.5, firing=car.boostT>0||(car.hyperT||0)>0;
     const _pn=performance.now();
@@ -3333,7 +3333,7 @@
       const rr=12+(1-f)*46; ctx.strokeStyle='rgba(180,240,255,'+(f*0.8).toFixed(2)+')'; ctx.lineWidth=2;
       ctx.beginPath(); ctx.arc(bx,by+bh/2,rr,0,7); ctx.stroke(); ctx.beginPath(); ctx.arc(bx+bw,by+bh/2,rr,0,7); ctx.stroke();
       ctx.restore(); car._m24flash=Math.max(0,f-0.05); }
-    const label = full ? '⚡ READY!  · SHIFT TO BURN M24.9e' : usable ? '⚡ M24.9e  · SHIFT to burn' : '⚡ M24.9e  · drift to charge';
+    const label = full ? '⚡ READY!  · SHIFT TO BURN QUANTUM' : usable ? '⚡ QUANTUM  · SHIFT to burn' : '⚡ QUANTUM  · drift to charge';
     const lblCol = full ? ((Math.floor(_pn/180)%2)?COL.cyan:COL.gold) : usable ? COL.gold : '#f4ecd8';
     ctx.fillStyle=lblCol; ctx.font=(full?'900 13px':'800 12px')+' Trebuchet MS'; ctx.textAlign='center'; ctx.fillText(label,W/2,by-10);
     if((car.driftChain||0)>1 && (car.chainT||0)>0){ const chy=by-34, chw=110, chx=W/2-chw/2;
@@ -3428,7 +3428,7 @@
         ctx.fillText(best.toFixed(2)+'s', px+pw-14, py+62); }
       ctx.restore(); }
     ctx.save(); ctx.shadowColor='rgba(0,0,0,0.92)'; ctx.shadowBlur=0; ctx.shadowOffsetX=1.5; ctx.shadowOffsetY=1.5;
-    ctx.textAlign='left'; ctx.font='800 13px Trebuchet MS'; ctx.fillStyle=night?COL.cyan:COL.gold; ctx.fillText((night?'◐ NIGHT (2× M24.9e) [N]':'☀ DAY [N]')+(wet?'  ·  💧 WET [W]':'  ·  DRY [W]'),24,62);
+    ctx.textAlign='left'; ctx.font='800 13px Trebuchet MS'; ctx.fillStyle=night?COL.cyan:COL.gold; ctx.fillText((night?'◐ NIGHT (2× QUANTUM) [N]':'☀ DAY [N]')+(wet?'  ·  💧 WET [W]':'  ·  DRY [W]'),24,62);
     ctx.restore();
     // ===== LEADERBOARD ===== ranked list of every racer — turns "P?/N" into a readable race narrative
     if(phase==='racing' || phase==='countdown'){
