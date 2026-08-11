@@ -250,8 +250,8 @@ identically in both builds, so they are the machine, not the code.
 - The **flat renderer** still carries old top-down polish (flower checkpoints,
   turn-guide chevrons, wet reflection streaks) only partly carried over.
 - **Menus / garage / results screens** were deliberately left out of the UHD pass.
-- `rebuild-zip.py` hardcodes `os.chdir(r'C:\Users\respe\qmm-racing')`, which is not
-  where the checkout lives on every rig. Fix the path before trusting it.
+- ~~`rebuild-zip.py` hardcodes `os.chdir(r'C:\Users\respe\qmm-racing')`~~ — **fixed in `bef2e47`**;
+  it now anchors to `Path(__file__).resolve().parent` and refuses to run outside a checkout.
 - All of the above was verified on headless SwiftShader, 3–5× slower than real Chrome.
   Judge the *look* on a real machine.
 
@@ -350,8 +350,30 @@ trademarks. Match the *era* too: a 1970 Camaro is not a stand-in for a modern ZL
 
 ## Open
 
-- **Build is 39.8 MB** against the ~35 MB itch-mobile ceiling (music 22.2, superseded top-down sprites
-  6.7, cars3d 4.6). cars3d is not the problem. Decide before deploying.
+- **Build is 36.0 MB** against the ~35 MB itch-mobile ceiling. Remaining weight: music 22.2,
+  cars3d 4.6, photo 2.8, turn 1.5, world 1.2, root sprites 3.9. cars3d is not the problem —
+  **music is 56% of the build** and the only lever with real weight left. Decide before the
+  next release.
+
+  ⚠ An earlier draft of this line called the 6.7 MB of root sprites "superseded" and implied
+  they were free to delete. **They are not.** Only 2.78 MB was actually dead
+  (`car_option1.png`, `car_option2.png`, `car_rear.png`) and that has now been cut. What is
+  left in `assets/` root is live:
+  - `roof1..roof8.png` (2.2 MB) — loaded at runtime by the `ROOF` array (search
+    `assets/'+n+'.png`), and drawn as the rooftop art on **every** roadside building. Deleting
+    these strips the texture out of the top-down view, which is now the **default camera**.
+  - `car_*.png` (~1.5 MB) — the `CARS[].file` sprites, used by the garage and the flat renderer.
+  - `screech.wav`.
+
+  Before deleting any asset, grep for the **dynamic** builders, not just the literal filename:
+  `assets/'+c.file`, `assets/'+n+'.png`, `assets/photo/car_'+c.id+'.png`,
+  `assets/turn/'+id+'.png`, `assets/cars3d/'+id+'.png`, `assets/music/'+t.f+'.mp3`,
+  `assets/world/'+n+'.jpg`. A plain filename search reports zero refs for files that are very
+  much in use.
+
 - Night still uses the daylit bake — headlight cones and brake glow are live on top, but the body
   doesn't darken. A second night-lit strip per car is the obvious fix.
-- Nothing here is committed or deployed.
+- **Shipped 2026-08-11.** Committed and deployed to itch as build #1875145 (`de78dbf`), and
+  listed on Game Jolt (game 1091069). The chase camera is **opt-in** — `camMode` defaults to 1
+  (BIRDS-EYE) because the pseudo-3D renderer below is still WIP and was what every first-time
+  player landed in.
