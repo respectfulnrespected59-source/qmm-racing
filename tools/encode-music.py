@@ -66,6 +66,9 @@ def main() -> int:
     ap.add_argument("--write", action="store_true", help="actually encode (default is a dry run)")
     ap.add_argument("--allow-partial", action="store_true",
                     help="encode even if some tracks have no master (leaves the old file in place)")
+    ap.add_argument("--map", action="append", default=[], metavar="TRACK=FILENAME",
+                    help="pin a track to a master by name when auto-matching cannot: "
+                         "--map t01_supasilky=SupaSilky_v3.wav (repeatable)")
     args = ap.parse_args()
 
     if not shutil.which("ffmpeg"):
@@ -80,11 +83,32 @@ def main() -> int:
         print(f"no audio files under {args.masters}", file=sys.stderr)
         return 1
 
+    # Explicit --map pins win outright; they exist for masters whose names carry no
+    # trace of the in-game slug.
+    pinned = {}
+    for entry in args.map:
+        if "=" not in entry:
+            print(f"--map needs TRACK=FILENAME, got: {entry}", file=sys.stderr)
+            return 1
+        want, fname = entry.split("=", 1)
+        want, fname = want.strip(), fname.strip()
+        if want not in EXPECTED:
+            print(f"--map: '{want}' is not one of the {len(EXPECTED)} expected tracks", file=sys.stderr)
+            return 1
+        hit = [p for p in candidates if p.name == fname or p.stem == fname]
+        if len(hit) != 1:
+            print(f"--map: '{fname}' matched {len(hit)} files under {args.masters}", file=sys.stderr)
+            return 1
+        pinned[want] = hit[0]
+
     # Match on the normalised stem. Exact first, then unique substring -- an ambiguous
     # substring is reported rather than guessed, because silently shipping the wrong
     # song under the right filename is worse than failing here.
     mapping, unmatched, ambiguous = {}, [], {}
     for want in EXPECTED:
+        if want in pinned:
+            mapping[want] = pinned[want]
+            continue
         slug = slug_of(want)
         exact = [p for p in candidates if norm(p.stem) == slug]
         if len(exact) == 1:
@@ -104,7 +128,8 @@ def main() -> int:
     print(f"bitrate     : {args.bitrate} mono 48 kHz\n")
     for want in EXPECTED:
         src = mapping.get(want)
-        print(f"  {want:<28} <- {src.name if src else '** NO MASTER FOUND **'}")
+        tag = "  (pinned)" if want in pinned else ""
+        print(f"  {want:<28} <- {src.name if src else '** NO MASTER FOUND **'}{tag}")
 
     if ambiguous:
         print("\nAMBIGUOUS -- more than one master matched, refusing to guess:")
@@ -112,6 +137,22 @@ def main() -> int:
             print(f"  {want}: {', '.join(o.name for o in opts)}")
     if unmatched:
         print("\nNO MASTER for: " + ", ".join(unmatched))
+
+    # Show what was actually in the folder but never used. Without this, an
+    # unmatched track is undiagnosable -- you cannot tell a missing file from a
+    # file whose name simply did not match.
+    if unmatched or ambiguous:
+        used = {p.resolve() for p in mapping.values()}
+        leftover = sorted(p for p in candidates if p.resolve() not in used)
+        if leftover:
+            print(f"\nMasters present but unused ({len(leftover)}):")
+            for p in leftover:
+                print(f"  {p.name:<44} -> normalises to '{norm(p.stem)}'")
+            print("\nWanted slugs, for comparison:")
+            for want in (unmatched + list(ambiguous)):
+                print(f"  {want:<28} -> looking for '{slug_of(want)}'")
+            print("\nEither rename the master so the wanted slug appears in its filename,")
+            print("or add the pair to --map (repeatable): --map t01_supasilky=SupaSilky_v3.wav")
 
     if (unmatched or ambiguous) and not args.allow_partial:
         print("\nNothing written. Fix the names, or re-run with --allow-partial.")
