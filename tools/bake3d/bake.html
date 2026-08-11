@@ -1,0 +1,386 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>QMM Racing — car turntable bake</title>
+<style>html,body{margin:0;background:#101014;color:#ddd;font:13px monospace}#out{display:block}</style>
+</head>
+<body>
+<!--
+  OFFLINE TOOL — never shipped with the game.
+
+  Bakes a 3D car model into the one thing the chase camera actually needs: a strip of renders taken from the
+  camera's OWN fixed tilt, one per yaw angle. The game's rig is CAM_H=400 / CAM_BACK=545, so the elevation is
+  atan(400/545) = 36.3 degrees and it NEVER changes — only the car's heading relative to the lens does. That is
+  what makes a 1-D strip sufficient where a free camera would need a 2-D grid.
+
+  Rendered with a long lens on purpose. The game scales the sprite by its own perspective factor, so a
+  near-orthographic bake stays correct at every distance; a wide-angle bake would only be right at one.
+
+  Every frame is aimed at the car's GROUND CENTRE (0,0,0), so that point lands on the exact centre of each cell.
+  The runtime anchors there and needs no per-frame offsets.
+
+  Driven by tools/bake3d/bake.py. Params:
+    ?model=<url>&frames=48&cell=192&cover=2.6&color=%23C43B3B&tilt=36.3
+-->
+<canvas id="out"></canvas>
+<div id="log">booting…</div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
+const Q = new URLSearchParams(location.search);
+// Either one model (?model=…&color=…) or the whole roster in a single run:
+//   ?list=camaro|camaro.glb|%23C43B3B,charger|charger.glb|%23b0202a,…
+// One run matters: each page load re-downloads three.js and rebuilds the PMREM environment, and baking the roster
+// one car per navigation is nine times that for no benefit.
+const LIST = (Q.get('list') || '').split(',').filter(Boolean).map(s => {
+  // id | file | colour | flip | paintMaterial
+  // paintMaterial names the bodyshell explicitly. Guessing it is unreliable on real models: the Lamborghini's
+  // shell is called "Carbon_R", the BMW's is "ARm4_main" behind a bigger interior material, and heuristics pick
+  // wrong in both directions. When the guess is wrong, name it.
+  const [id, file, color, flip, paintMat] = s.split('|');
+  return { id, file, color: color || '', flip: flip === '1', paintMat: paintMat || '' };
+});
+const MODEL  = Q.get('model');
+const FRAMES = +(Q.get('frames') || 48);
+const CELL   = +(Q.get('cell')   || 192);        // px per frame, square
+const COVER  = +(Q.get('cover')  || 2.6);        // how many car-lengths the cell spans
+const TILT   = +(Q.get('tilt')   || 36.3) * Math.PI / 180;
+const COLOR  = Q.get('color') || '';             // optional body repaint
+const YAWOFF = +(Q.get('yawoff') || 0) * Math.PI / 180;
+const log = m => { document.getElementById('log').textContent = m; };
+
+try {
+
+// ── renderer ────────────────────────────────────────────────────────────────────────────────────────────────
+// Rendered at 2x and downsampled into the atlas: the game draws these small, and supersampling is the cheapest
+// way to stop the roof line and the A-pillars from crawling as the car turns.
+const SS = 2;   // 2x supersample: 3x looked marginally better and tripled an already slow software bake
+const rt = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+rt.setSize(CELL * SS, CELL * SS, false);
+rt.setClearColor(0x000000, 0);
+rt.outputColorSpace = THREE.SRGBColorSpace;
+rt.toneMapping = THREE.ACESFilmicToneMapping;
+rt.toneMappingExposure = 1.05;
+// SELF-SHADOWING. The single biggest detail win available here, and it costs nothing at runtime because it is
+// baked. Without it a car is uniformly lit and reads as a flat toy: no dark under the arches, no shadow thrown by
+// the spoiler onto the deck, no separation where the roof meets the glass. There is deliberately no ground plane —
+// the frame must stay transparent and the game draws its own contact shadow — so this is the car shadowing itself.
+rt.shadowMap.enabled = true;
+rt.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+const pivot = new THREE.Group();                  // the car spins on this; the camera never moves
+scene.add(pivot);
+
+// ── lighting ────────────────────────────────────────────────────────────────────────────────────────────────
+// Key direction matches the game's SUN3 = (0.63, -0.78). It stays fixed relative to the CAMERA here, because the
+// sprite is drawn into a camera-locked frame — the car rotates under a stationary light, which is what the
+// polygon renderer already does.
+scene.add(new THREE.HemisphereLight(0x9fb4d8, 0x2a2233, 1.05));
+const key = new THREE.DirectionalLight(0xfff2dc, 2.6);
+key.castShadow = true;
+key.shadow.mapSize.set(1536, 1536);
+key.shadow.bias = -0.0012;
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x8fc4ff, 0.9);
+scene.add(rim);
+const fill = new THREE.DirectionalLight(0xffd9c0, 0.35);   // stops undersides going to solid black
+scene.add(fill);
+// Lights and the shadow frustum have to be SIZED per model. A directional light only cares about direction, so the
+// old fixed positions lit everything correctly by luck — but a shadow camera does care, and these meshes range from
+// 0.6 to 191 units long, so one fixed frustum would miss nine of the ten cars entirely.
+function frameLights(carLen) {
+  const D = carLen * 2;
+  key.position.set(0.63 * D, 1.35 * D, -0.78 * D);
+  rim.position.set(-0.8 * D, 0.55 * D, 0.9 * D);
+  fill.position.set(0.1 * D, -0.6 * D, 0.5 * D);
+  const s = carLen * 0.72;
+  const c = key.shadow.camera;
+  c.left = -s; c.right = s; c.top = s; c.bottom = -s;
+  c.near = carLen * 0.2; c.far = D * 3;
+  c.updateProjectionMatrix();
+}
+
+// A tiny studio environment so paint and glass have something to reflect. Without it, metallic bodywork renders
+// as flat black and every car looks like unpainted primer.
+const envScene = new THREE.Scene();
+envScene.add(new THREE.Mesh(new THREE.SphereGeometry(12, 16, 12),
+  new THREE.MeshBasicMaterial({ color: 0x8195b8, side: THREE.BackSide })));
+const pmrem = new THREE.PMREMGenerator(rt);
+scene.environment = pmrem.fromScene(envScene, 0.04).texture;
+
+// ── camera: the game's own rig ──────────────────────────────────────────────────────────────────────────────
+const cam = new THREE.PerspectiveCamera(14, 1, 0.1, 200);   // long lens ⇒ near-orthographic ⇒ distance-independent
+function frameCamera(carLen) {
+  const span = carLen * COVER;                               // world span the cell must cover
+  const dist = (span * 0.5) / Math.tan(THREE.MathUtils.degToRad(cam.fov * 0.5));
+  cam.position.set(0, Math.sin(TILT) * dist, Math.cos(TILT) * dist);
+  cam.lookAt(0, 0, 0);                                       // ground centre ⇒ dead centre of every cell
+  // Clip planes MUST follow the distance. These models come from nine authors and are in wildly different units —
+  // the Camaro is 0.78 long, the Rolls Royce 191 — so the long lens sits ~5 units back for one and ~1200 for the
+  // other. A fixed far plane of 200 put those two cars entirely behind it and they baked as empty frames.
+  cam.near = Math.max(0.01, dist * 0.02);
+  cam.far  = dist * 6;
+  cam.updateProjectionMatrix();
+  return span;
+}
+
+// ── load ────────────────────────────────────────────────────────────────────────────────────────────────────
+const loader = new GLTFLoader();
+const draco = new DRACOLoader();
+draco.setDecoderPath('https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/');
+loader.setDRACOLoader(draco);
+
+const atlas = document.getElementById('out');
+const actx = atlas.getContext('2d');
+actx.imageSmoothingQuality = 'high';
+
+async function bakeOne(url, color, label, flip, paintMat) {
+  log(label + ': loading ' + url);
+  const gltf = await loader.loadAsync(url);
+  const car = gltf.scene;
+
+  // ORIENT. Snapping to whichever axis-aligned dimension happens to be longest is not enough: these meshes come
+  // from nine different authors and some are modelled at an arbitrary yaw. The Camaro sat about 35 degrees off,
+  // which an axis-aligned bounding box reports as a short WIDE car — so it framed wrong and baked as a car
+  // permanently driving diagonally across its own sprite.
+  // A car is long and narrow, so the correct yaw is simply the one whose footprint is most elongated. Sweep it.
+  // Measured by re-boxing the object rather than by transforming points by hand — same answer, no sign errors.
+  const probe = new THREE.Box3(), psz = new THREE.Vector3();
+  let bestA = 0, bestRatio = -1;
+  for (let d = 0; d < 180; d += 1) {
+    car.rotation.y = d * Math.PI / 180; car.updateWorldMatrix(true, true);
+    probe.setFromObject(car).getSize(psz);
+    const ratio = psz.z / Math.max(1e-6, psz.x);
+    if (ratio > bestRatio) { bestRatio = ratio; bestA = car.rotation.y; }
+  }
+  // …then the nose. Nothing in the geometry reliably says which END is the front (mid-engine cars break every
+  // heuristic), so it is a per-car quarter-turn count in the bake list, read off a contact sheet. `flip` adds 180.
+  car.rotation.y = bestA + (flip ? Math.PI : 0);
+  car.updateWorldMatrix(true, true);
+  let box = new THREE.Box3().setFromObject(car);
+  let size = box.getSize(new THREE.Vector3());
+  const carLen = size.z;
+  const ctr = box.getCenter(new THREE.Vector3());
+  car.position.sub(new THREE.Vector3(ctr.x, box.min.y, ctr.z));
+  pivot.add(car);
+
+  if (color) {
+    // Find the BODYSHELL to repaint. Triangle count is a bad proxy for "this is the paint" and picking the biggest
+    // material got this wrong on the first pass: a car's panels are large flat surfaces worth very few triangles,
+    // while its wheels are the most detailed thing on it. The RX-7's Rims material is 10,380 tris against 2,066
+    // for Body_paint, so the baker dutifully painted the wheels and left the car white.
+    // So: trust the artist's NAMING first, and only fall back to size — with wheels and trim excluded either way.
+    const SKIP = /glass|window|light|lamp|tyre|tire|rubber|chrome|mirror|plate|rim|wheel|brake|disc|interior|seat|misc|emission|matte|leather|carbon|trim|grill|black/;
+    // Rank materials by SURFACE AREA, not triangle count. Triangle count is actively misleading on a car: bodywork
+    // is a few enormous smooth panels while wheels, grilles and interiors carry most of the geometry. Ranking by
+    // count picked `Rims` over `Body_paint` (10,380 tris against 2,066) and painted the wheels. Area cannot make
+    // that mistake — the shell is the biggest surface on any car by a wide margin.
+    const tally = new Map();
+    const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3();
+    car.traverse(o => { if (!o.isMesh) return;
+      const m = Array.isArray(o.material) ? o.material[0] : o.material; if (!m) return;
+      const g = o.geometry, pos = g.attributes.position, idx = g.index;
+      const tris = (idx ? idx.count : pos.count) / 3;
+      const step = Math.max(1, Math.floor(tris / 2000));               // sample: exact area is not needed, ranking is
+      let area = 0, taken = 0;
+      for (let t = 0; t < tris; t += step) {
+        const i0 = idx ? idx.getX(t*3) : t*3, i1 = idx ? idx.getX(t*3+1) : t*3+1, i2 = idx ? idx.getX(t*3+2) : t*3+2;
+        vA.fromBufferAttribute(pos, i0).applyMatrix4(o.matrixWorld);
+        vB.fromBufferAttribute(pos, i1).applyMatrix4(o.matrixWorld);
+        vC.fromBufferAttribute(pos, i2).applyMatrix4(o.matrixWorld);
+        vB.sub(vA); vC.sub(vA); area += vB.cross(vC).length() * 0.5; taken++;
+      }
+      if (taken) tally.set(m, (tally.get(m) || 0) + area * (tris / taken));
+    });
+    let src = null, best = -1;
+    if (paintMat) for (const [m] of tally) if ((m.name || '') === paintMat) { src = m; break; }
+    if (!src) for (const [m] of tally) if (/body|paint|shell|chassis|exterior|carroc/.test((m.name || '').toLowerCase())) { src = m; break; }
+    if (!src) for (const [m, a] of tally) {
+      if (SKIP.test((m.name || '').toLowerCase())) continue;
+      if (a > best) { best = a; src = m; }
+    }
+    if (src) log(label + ': painting "' + (src.name || '(unnamed)') + '"');
+    if (src) {
+      const painted = src.clone();          // clone, never repaint in place: glTF meshes share material instances
+      // A material's colour MULTIPLIES its base texture, so asking a black-textured bodyshell for green gets you
+      // black. TORO VERDE has to be green, so a leading '!' means paint HARD: drop the base map and take the
+      // colour literally. Without the '!' the texture survives, which is what keeps the police livery and the
+      // Challenger's racing stripes intact.
+      const hard = color[0] === '!';
+      if (hard) { painted.map = null; color = color.slice(1); }
+      painted.color = new THREE.Color(color);
+      painted.metalness = Math.min(0.55, src.metalness ?? 0.4);
+      painted.roughness = Math.min(0.42, src.roughness ?? 0.35);
+      car.traverse(o => { if (!o.isMesh) return;
+        if (Array.isArray(o.material)) { o.material = o.material.map(m => m === src ? painted : m); }
+        else if (o.material === src) o.material = painted; });
+    }
+  }
+
+  // ── WHEELS COME OUT OF THE BAKE ───────────────────────────────────────────────────────────────────────────
+  // A baked frame is frozen, so wheels baked into the body can never steer or spin — the car slides around
+  // corners on locked wheels like a pushed toy. So they are located, measured, and then HIDDEN, and the game
+  // draws them live underneath the body strip. The open arches let the live wheel show through.
+  //
+  // Clustered by vertex position rather than by object, because these models disagree about structure: some have
+  // four wheel meshes, the RX-7 has every rim merged into ONE mesh sharing a "Rims" material. Bucketing vertices
+  // by the sign of their x and z gets four hubs either way.
+  // Matrices MUST be refreshed first. The centring translate above only writes car.position; matrixWorld is not
+  // recomputed until something renders, and the pivot still carries the previous car's spin from its bake loop.
+  // Measuring vertices through a stale matrixWorld put every hub out by the centring offset, which showed up as
+  // wheels hovering outside the arches on one side of the car.
+  pivot.rotation.y = 0;
+  car.updateWorldMatrix(true, true);
+  const WHEELRE = /wheel|tyre|tire|rim/i;
+  const wheelObjs = [];
+  car.traverse(o => { if (o.isMesh) {
+    const mn = (Array.isArray(o.material) ? o.material[0] : o.material)?.name || '';
+    if (WHEELRE.test(o.name) || WHEELRE.test(mn)) wheelObjs.push(o); } });
+  // Naming is not dependable in EITHER direction. Some cars label their wheels and some ship everything as
+  // "Object_17" — but worse, the ZL1 names its wheel material `Car_rubber_wheel` and then uses that same rubber on
+  // trim running the length of the car. Trusting the name there put door seals in the wheel buckets and produced a
+  // "wheel" a third of the car long.
+  // So the geometric test is the authority and the name is only a hint: a wheel is a smallish mesh sitting low and
+  // pushed out to a corner. True of every car ever made, and immune to what the artist called things.
+  {
+    const whole = new THREE.Box3().setFromObject(car), ws = whole.getSize(new THREE.Vector3());
+    const mid = whole.getCenter(new THREE.Vector3());
+    const candidates = wheelObjs.length ? wheelObjs.slice() : [];
+    if (!candidates.length) car.traverse(o => { if (o.isMesh) candidates.push(o); });
+    wheelObjs.length = 0;
+    for (const o of candidates) {
+      const b = new THREE.Box3().setFromObject(o), c = b.getCenter(new THREE.Vector3()), sz = b.getSize(new THREE.Vector3());
+      if (b.min.y > whole.min.y + ws.y * 0.34) continue;               // not sitting on the road
+      if (Math.abs(c.x - mid.x) < ws.x * 0.17) continue;               // not outboard
+      if (Math.abs(c.z - mid.z) < ws.z * 0.20) continue;               // not out at an end
+      if (sz.z > ws.z * 0.34 || sz.x > ws.x * 0.42) continue;          // too big to be a wheel
+      wheelObjs.push(o);
+    }
+  }
+  const buckets = [{}, {}, {}, {}];                       // [x<0,z<0] [x>0,z<0] [x<0,z>0] [x>0,z>0]
+  for (const b of buckets) { b.x0 = b.y0 = b.z0 = Infinity; b.x1 = b.y1 = b.z1 = -Infinity; b.n = 0; }
+  const v = new THREE.Vector3();
+  for (const o of wheelObjs) {
+    const pos = o.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+      const b = buckets[(v.x > 0 ? 1 : 0) + (v.z > 0 ? 2 : 0)];
+      if (v.x < b.x0) b.x0 = v.x; if (v.x > b.x1) b.x1 = v.x;
+      if (v.y < b.y0) b.y0 = v.y; if (v.y > b.y1) b.y1 = v.y;
+      if (v.z < b.z0) b.z0 = v.z; if (v.z > b.z1) b.z1 = v.z; b.n++;
+    }
+  }
+  // Everything is emitted in HALF-LENGTHS, the same unit the game already uses for body-local coordinates, so the
+  // runtime needs to know nothing about this model's scale (these range from 0.6 to 191 units long).
+  const HL = carLen / 2, wheels = [];
+  for (const b of buckets) {
+    if (b.n < 12) continue;                               // too few verts to be a wheel
+    const r = Math.max(b.y1 - b.y0, b.z1 - b.z0) / 2;
+    wheels.push({ u: +(((b.z0 + b.z1) / 2) / HL).toFixed(4),   // +u = nose
+                  v: +(((b.x0 + b.x1) / 2) / HL).toFixed(4),   // +v = right
+                  r: +(r / HL).toFixed(4),
+                  w: +(((b.x1 - b.x0) / 2) / HL).toFixed(4) });
+  }
+  // PLAUSIBILITY GUARD. Wheel extraction failing is fine — the car just keeps its baked-in wheels and doesn't spin.
+  // Extracting something WRONG is not fine: it draws giant discs through the bodywork, and it ships silently
+  // because nothing else complains. So measure against what a car actually is. Across every model that worked,
+  // radius landed at 0.12-0.17 of the half-length, the axles at |u| 0.5-0.7, the track at |v| 0.28-0.38.
+  const plausible = w => w.r > 0.08 && w.r < 0.24
+                      && Math.abs(w.u) > 0.30 && Math.abs(w.u) < 0.90
+                      && Math.abs(w.v) > 0.15 && Math.abs(w.v) < 0.60;
+  const haveWheels = wheels.length === 4 && wheels.every(plausible);
+  if (wheels.length === 4 && !haveWheels)
+    log(label + ': wheels REJECTED as implausible -> ' + JSON.stringify(wheels.map(w => w.r)));
+  // Hide by REGION, not by which meshes the filter happened to match. A wheel is usually several meshes — tyre,
+  // rim, hub, brake disc, caliper — and hiding only the ones that passed the filter left the rims behind as bare
+  // white discs floating where the tyre used to be. Anything centred inside a hub sphere goes.
+  if (haveWheels) {
+    const hubs = wheels.map(w => new THREE.Vector3(w.v * HL, 0, w.u * HL));
+    const rad = wheels[0].r * HL * 1.45;
+    const c = new THREE.Vector3(), bb = new THREE.Box3();
+    car.traverse(o => { if (!o.isMesh) return;
+      bb.setFromObject(o).getCenter(c);
+      for (const h of hubs) {
+        if ((c.x - h.x) ** 2 + (c.z - h.z) ** 2 < rad * rad && bb.min.y < rad * 1.6) { o.visible = false; break; }
+      } });
+  }
+
+  // ── REPAIR TEXTURE-LESS EXPORTS ───────────────────────────────────────────────────────────────────────────
+  // Some Sketchfab archives ship with NO images at all: the ZL1's has zero, and every one of its 23 materials
+  // exports with no texture and no base colour, which glTF then defaults to WHITE. The result is a car with white
+  // tyres, white trim and white glass — the artist's intent survives only in the material NAMES.
+  // So when a material is untextured and still sitting at pure white, read its name and give it a sensible colour.
+  // Only fires on that exact case, so properly-textured models are untouched.
+  const INFER = [
+    [/glass|window|windshield/i,                 0x0d1016, 0.05, 0.35],
+    [/tyre|tire|rubber/i,                        0x14141a, 0.00, 0.92],
+    [/chrome|mirror|steel|alu|polish/i,          0xc9ced8, 1.00, 0.12],
+    [/carbon/i,                                  0x1a1a1f, 0.35, 0.42],
+    [/leather|alcantara|calskin|seat|interior/i, 0x2a2529, 0.00, 0.85],
+    [/black|dark/i,                              0x1d1d22, 0.20, 0.60],
+    [/trim|plastic/i,                            0x26262c, 0.10, 0.70],
+    [/red/i, 0xb02020, 0.30, 0.35], [/blue/i, 0x24409a, 0.30, 0.35],
+    [/green/i, 0x2f8a3a, 0.30, 0.35], [/yellow|gold/i, 0xd8b02a, 0.35, 0.32],
+    [/silver|grey|gray/i, 0x9aa0aa, 0.60, 0.35], [/white/i, 0xe8e8ee, 0.20, 0.35],
+  ];
+  const seen = new Set();
+  car.traverse(o => { if (!o.isMesh) return;
+    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+      if (!m || seen.has(m)) continue; seen.add(m);
+      if (m.map || m.color.getHex() !== 0xffffff) continue;      // textured or deliberately coloured → leave alone
+      for (const [re, col, metal, rough] of INFER) {
+        if (!re.test(m.name || '')) continue;
+        m.color.setHex(col);
+        if (m.metalness !== undefined) m.metalness = metal;
+        if (m.roughness !== undefined) m.roughness = rough;
+        break;
+      } } });
+
+  car.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) if (m) m.envMapIntensity = 1.25; } });   // let the paint actually pick up the studio
+
+  const span = frameCamera(carLen);
+  frameLights(carLen);
+
+  atlas.width = CELL * FRAMES; atlas.height = CELL;
+  for (let f = 0; f < FRAMES; f++) {
+    // Frame 0 is the car pointing DIRECTLY AWAY from the lens — the pure chase view, the one on screen most of
+    // the time — so the runtime's index 0 needs no offset beyond the nose-end correction.
+    pivot.rotation.y = YAWOFF + Math.PI + (f / FRAMES) * Math.PI * 2;
+    rt.render(scene, cam);
+    actx.drawImage(rt.domElement, 0, 0, CELL * SS, CELL * SS, f * CELL, 0, CELL, CELL);
+    if (!(f % 8)) log(label + ': ' + (f + 1) + '/' + FRAMES);
+  }
+  const png = atlas.toDataURL('image/png');
+  pivot.remove(car);                                  // next car starts from an empty stage
+  return { png, meta: { frames: FRAMES, cell: CELL, cover: COVER, span, carLen, tilt: TILT,
+                        wheels: haveWheels ? wheels : null } };
+}
+
+if (LIST.length) {
+  const out = {};
+  for (const it of LIST) out[it.id] = await bakeOne(it.file, it.color, it.id, it.flip, it.paintMat);
+  window.__bake = { multi: out };
+  log('DONE ' + LIST.length + ' cars');
+} else {
+  const r = await bakeOne(MODEL, COLOR, 'single', Q.get('flip') === '1', Q.get('paintmat') || '');
+  window.__bake = r;
+  log('DONE ' + FRAMES + ' frames');
+}
+
+} catch (e) {
+  window.__bake = { error: (e && e.stack) || String(e) };
+  log('ERROR ' + e);
+}
+</script>
+</body>
+</html>

@@ -4,3 +4,13 @@
 Thumbs.db
 qmm-racing-itch.zip
 _deploy_stage/
+
+# Offline bake pipeline: source meshes + downloaded archives (~470MB). NEVER commit.
+tools/bake3d/hi/
+tools/bake3d/models/
+tools/bake3d/*.zip
+tools/bake3d/SKETCHFAB_URLS.tsv
+
+# local backups
+index_pre_*_backup.html
+tools/bake3d/SF_*.tsv

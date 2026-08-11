@@ -1,0 +1,45 @@
+QUANTUM MOTORS — 3D CAR MODEL CREDITS
+=====================================
+
+The cars in the chase camera are pre-rendered turntables baked from third-party 3D models.
+Every one is licensed Creative Commons Attribution 4.0, which REQUIRES this credit to travel
+with the game. Keep this file in the build, and keep these credits on the store page.
+
+All models from Sketchfab (https://sketchfab.com), all CC BY 4.0.
+
+  in-game car        model                                    author
+  -----------------  ---------------------------------------  ----------------------
+  QUANTUM ZL1        Camaro ZL1 1LE                           i3engx
+  QM ZL1 · VIOLET    Camaro ZL1 1LE                           i3engx
+  CRIMSON R/T        2020 Dodge Charger SRT Hellcat Redeye    DisneyCars
+  GHOST CAT          2018 Dodge Challenger SRT Hellcat        Emmanual Robinson, Jr.
+  STINGRAY Z         Chevrolet Corvette (C7)                  Martin Trafas
+  BAVARIA M6         BMW M4 f82                               Black Snow
+  SPYDER NINE        Toyota GR Supra                          thelightning
+  TORO VERDE         Lamborghini Centenario LP-770            SDC PERFORMANCE
+  BLACKTOP CT        Rolls-Royce Ghost                        Black Snow
+  ERASER PATROL      Police car                               SpatialNeglect
+
+Model pages (https://sketchfab.com/3d-models/<uid>):
+  Camaro ZL1 1LE .............. 47004eec66bf460ead2049a29c874620
+  Charger SRT Hellcat Redeye .. 8576f795be454cbe89a6e8d0d7eb62dc
+  Challenger SRT Hellcat ...... e31b4430d9934f61b212f55f194c9ef7
+  Corvette (C7) ............... 2b509d1bce104224b147c81757f6f43a
+  BMW M4 f82 .................. 8e87379f40fd40dcac0a751e22c1a188
+  Toyota GR Supra ............. 9231f2d5e71a43dd87603dc0b339d99d
+  Lamborghini Centenario ...... d679af35b5694301a185c7454a700c73
+  Rolls-Royce Ghost ........... 4a590f4afa094fa8b407a14db77a63a8
+  Police car .................. 9166b13b6ae341f4bfc093edb71d74f4
+
+CC BY 4.0: https://creativecommons.org/licenses/by/4.0/
+
+Only CC Attribution models were used. ShareAlike and NonCommercial models were deliberately
+excluded -- ShareAlike would try to pull the game under its own terms, and NonCommercial
+rules out commercial release outright.
+
+Meshes are unmodified; they were re-rendered from a fixed camera angle, and one was recoloured
+to a second in-game livery. In-game car names are Quantum Melanin Media's own -- no
+affiliation with, or endorsement by, any vehicle manufacturer is claimed or implied.
+
+Track centrelines for the real circuits are (c) OpenStreetMap contributors (ODbL), via
+TUMFTM/racetrack-database.

@@ -254,3 +254,104 @@ identically in both builds, so they are the machine, not the code.
   where the checkout lives on every rig. Fix the path before trusting it.
 - All of the above was verified on headless SwiftShader, 3–5× slower than real Chrome.
   Judge the *look* on a real machine.
+
+---
+
+# ★ CARS ARE NO LONGER DRAWN — they are baked 3D turntables (2026-08-11)
+
+Everything above about `p3Car` still exists, but it is now the **fallback**. A car with a strip in
+`assets/cars3d/` is drawn as a pre-rendered frame of a real 3D mesh.
+
+**Why this works here and nowhere else:** the rig's tilt never changes — `CAM_H/CAM_BACK` is a
+constant 0.73 (36.3°). Only the car's *yaw* varies, so one 1-D strip of 48 frames covers every angle
+you can ever see, for one `drawImage`. A free camera would need a 2-D grid and this would be absurd.
+No GPU, no three.js in the shipped game, no second render path.
+
+## The pipeline
+
+| stage | where |
+|---|---|
+| meshes (CC-BY, Sketchfab) | `tools/bake3d/hi/<id>/scene.gltf` — **gitignored, ~470MB** |
+| bake | `tools/bake3d/bake.html`, driven by Playwright |
+| install + quantise | `tools/bake3d/install_strips.py <dump>` |
+| runtime | `STRIP3` / `carStrip3()` in `index.html` |
+| shipped | `assets/cars3d/<id>.png` + `wheels.json` + `CREDITS.txt` (4.6 MB) |
+
+`rebuild-zip.py` walks `assets/` and root files only, so `tools/` never ships.
+
+## Constants you must not "clean up"
+
+- **`STRIP3.dir = -1`** — which way the strip sweeps vs how the game measures yaw. **Do not re-derive
+  this from first principles.** I argued my way to +1 twice and was wrong twice. Drive it and look.
+  Wrong sign = fine on a straight, rotates BACKWARDS through corners, *and* live wheels refuse to sit
+  in the arches. One fault, two symptoms that look unrelated.
+- **`STRIP3.phase = 0`** — a whole-turn offset. It was briefly 0.5 to correct a nose-on bake; that was
+  the wrong place, because which end is the nose varies per model and belongs in the baker's per-car
+  flip flag. Fixing the baker without clearing this = two 180°s = backwards again.
+- **`STRIP_YS = 1/cos(tilt)`** — the bake is orthographic at 36.3°, the engine is a pinhole. Height and
+  forward offsets differ between them by exactly this. Without it the cell is squashed against
+  everything the engine projects itself, and live wheels sit outside the baked arches.
+- **Sub-frame rotation** — nearest frame, then rotate the cell by the residual yaw × `sin(tilt)`.
+  48 frames is 7.5° a step and even 96 still visibly steps at 240mph; this gives continuous rotation
+  for free. More frames is the wrong lever.
+
+## Wheels are drawn LIVE, not baked
+
+A baked wheel can never steer or spin. So the baker locates the hubs, measures them in half-lengths,
+and **hides them**; the game draws all four through the real projection under the body strip, front
+pair steering, all four rolling from an odometer (`θ = distance / radius`).
+
+- Hide by **REGION, not by match** — a wheel is tyre+rim+hub+disc+caliper, and hiding only matched
+  meshes leaves bare white rim discs floating where the tyre was.
+- The geometric test is the authority, the material NAME is only a hint: the ZL1 names its wheel
+  material `Car_rubber_wheel` and then uses that rubber on trim running the whole car.
+- **Plausibility guard**: failing extraction is fine (wheels stay baked in, just don't spin).
+  Extracting something WRONG ships giant discs silently. Real cars: r 0.12–0.17 of half-length.
+
+## Baker traps, each of which cost real time
+
+- **Rank paint by SURFACE AREA, never triangle count.** Bodywork is a few enormous panels; wheels and
+  interiors carry the geometry. Count picked `Rims` (10,380 tris) over `Body_paint` (2,066).
+- **Colour multiplies the base texture** — a black-textured shell cannot go green. `!` prefix = paint
+  hard (drop the map). Used for TORO VERDE; deliberately not used on the police livery or the
+  Challenger's stripes, so their artwork survives.
+- **Repaint must handle material ARRAYS.** A `!Array.isArray(o.material)` guard made the repaint
+  silently do nothing on most detailed models.
+- **Some Sketchfab archives ship ZERO images.** The ZL1's has none, so all 23 materials default to
+  WHITE and the artist's intent survives only in the NAMES. The baker infers colour from name when a
+  material is untextured *and* still pure white. **If a swapped model looks bleached, check this
+  before touching the paint code.**
+- **Clip planes must follow camera distance** — these meshes range 0.6 to 191 units long; a fixed
+  `far` of 200 baked two cars as completely empty frames.
+- **Orient by most-elongated-footprint sweep**, not longest AABB axis — some meshes sit at arbitrary yaw.
+- Refresh `matrixWorld` before measuring anything after a translate, and zero `pivot.rotation` first.
+  Measuring through a stale matrix put every wheel hub out by the centring offset; the tell was
+  asymmetric output (`v` not ±equal).
+
+## Quantisation is what pays for resolution
+
+`PIL Image.quantize(colors=256, method=FASTOCTREE)` → **~14% of the file**, measured mean channel error
+3.6/255, **alpha bit-identical**. 448px cells quantised (4.6 MB) ship *smaller* than 224px cells raw
+(6.5 MB). **Must be FASTOCTREE** — MEDIANCUT drops the transparent palette slot and puts every car on a
+black rectangle.
+
+## Sourcing meshes (Sketchfab)
+
+Search and faceCount are **public** — use curl, it is CORS-blocked from the browser. Downloads need a
+login: `sketchfab.com/i/models/<uid>/download` (cookie auth) returns a **presigned S3 URL** that curl
+can then fetch. Must be run from a **sketchfab.com origin**, not the game's localhost.
+
+## Licensing — this is an obligation, not a nicety
+
+Every mesh is **CC Attribution**; ShareAlike and NonCommercial were deliberately excluded (SA would try
+to pull the game under its terms). `assets/cars3d/CREDITS.txt` ships automatically and **must also go on
+the itch page**. In-game names stay QMM's own — the CC licence covers the mesh, not a manufacturer's
+trademarks. Match the *era* too: a 1970 Camaro is not a stand-in for a modern ZL1.
+
+## Open
+
+- **Build is 39.8 MB** against the ~35 MB itch-mobile ceiling (music 22.2, superseded top-down sprites
+  6.7, cars3d 4.6). cars3d is not the problem. Decide before deploying.
+- Night still uses the daylit bake — headlight cones and brake glow are live on top, but the body
+  doesn't darken. A second night-lit strip per car is the obvious fix.
+- Nothing here is committed or deployed.

@@ -281,6 +281,105 @@
   function carSprite(c){ if(photo){ if(!PHOTOIMG[c.id])loadPhoto(c); const p=c.tint?PHOTOTINT[c.id]:PHOTOIMG[c.id]; if(spriteReady(p))return p; }
     if(c.tint){ if(!TINT[c.id]&&CARIMG[c.id]&&CARIMG[c.id].naturalWidth)buildTintInto(CARIMG[c.id],c,TINT,true); if(TINT[c.id])return TINT[c.id]; } return CARIMG[c.id]; }   // LAZY tint build — bulletproof vs file:// load races (builds the moment the purple car is first drawn)
   function spriteReady(s){ return s && (s.tagName==='CANVAS' || (s.complete&&s.naturalWidth)); }
+  // Where a car's TAILPIPES are, in world units. Derived from that car's own painted length rather than hard-coded,
+  // because the nitro used to spawn at a flat 22–48 units behind centre — numbers that were tuned when the body was
+  // reckoned much shorter. Against the real half-length (~85) those land halfway up the car, so the flame lit up
+  // through the roof instead of out of the back.
+  function pipeOffset(cdef){
+    const SPW=1024*cdef.s*CARSCALE, p=CARPROF[cdef.turnFrom||cdef.id], L=SPW*(p?p.hl:0.430);
+    return {back:L*0.99, side:L*0.17, z:L*0.13};   // just past the bumper, twin pipes, low down in the valance
+  }
+  // ── BAKED 3D TURNTABLES ──────────────────────────────────────────────────────────────────────────────────────
+  // A car's shape is a 3D problem and canvas2d cannot solve it honestly — no depth buffer, no perspective-correct
+  // texturing, so every panel has to be hand-ordered and the result is a stylised approximation of a car rather
+  // than a car. The way out is the one pseudo-3D racers have used since OutRun: render a real mesh OFFLINE and
+  // ship the frames.
+  //
+  // It works here because this camera's TILT NEVER CHANGES — CAM_H/CAM_BACK is a constant 0.73. Only the car's
+  // yaw relative to the lens varies, so one strip of 48 renders covers every angle you can ever see, and picking
+  // a frame costs a single drawImage. No GPU, no second render path, no bundle.
+  //
+  // Baked by tools/bake3d/. All cars share one geometry, so the runtime needs no per-car metadata:
+  //   frames  how many yaw steps       cell   px per square frame
+  //   cover   how many CAR LENGTHS the cell spans — this is what maps the frame back to world size
+  //   dir     which way the strip advances as the car turns
+  //   phase   whole-turn offset, 0.5 = half a revolution
+  //
+  // Both of those are sign conventions and BOTH were wrong on the first pass — worth stating why, because they
+  // fail in different ways and are easy to confuse:
+  //   * dir is the direction the bake sweeps versus the direction the game measures yaw. It is -1, and the sign is
+  //     NOT worth deriving from first principles — I talked myself into +1 by arguing that a positive
+  //     (heading − camAng) and a positive three.js Y rotation both swing the nose screen-right, and that argument
+  //     is wrong somewhere in the handedness of a Y-down canvas against a right-handed scene. Drive it and look.
+  //     Symptom of the wrong sign: fine on a straight, rotating BACKWARDS through corners — and, because the live
+  //     wheels are placed from the real heading while the body comes from the strip, wheels that refuse to line up
+  //     with the arches. One sign error, two apparently unrelated bugs.
+  //   * phase is a whole-turn offset. It briefly sat at 0.5 to correct a bake whose nose came out pointing at the
+  //     camera. That was the WRONG PLACE to fix it: which end is the nose varies per model, so it belongs in the
+  //     baker's per-car flip flag, where it is now set from a contact sheet. Once the bake was corrected the
+  //     runtime offset became a SECOND 180°, and the cars drove backwards again — two fixes for one fault. Frame 0
+  //     is the rear of every car as baked, so this is 0 and should stay 0.
+  // cell/cover set the DETAIL: cover is how much dead air surrounds the car, so tightening it from 1.55 to 1.28 is
+  // free resolution, and the cell went 224→384 on top. The car now spans ~300px of source where it spanned 145.
+  // That more than doubled the raw bake, but the strips are palette-quantised on the way in (see
+  // tools/bake3d/install_strips.py) and ship at 2.7 MB against the old 6.5 MB.
+  const STRIP3={frames:48, cell:448, cover:1.28, dir:-1, phase:0, tilt:36.3*Math.PI/180};
+  // VERTICAL STRETCH. The bake is shot on a long lens — effectively orthographic at the rig's 36.3° — where a
+  // height h lands cos(T) up the frame and a forward offset d lands sin(T). The game's own pinhole puts them at
+  // 1 and tan(T). Both differ by exactly 1/cos(T), so the baked cell is uniformly SQUASHED against everything the
+  // engine projects itself. Drawn square it looks fine alone, and then live wheels — which do go through the real
+  // projection — sit outside the arches. Stretching the cell by this reconciles the two.
+  const STRIP_YS=1/Math.cos(STRIP3.tilt);
+  const CARSTRIP={};
+  // Where each baked car's wheels were, in the same half-length units the body-local frame uses, so the runtime
+  // never has to care that these meshes range from 0.6 to 191 units long. Written by the baker, which locates the
+  // hubs, measures them, and then HIDES them — a wheel baked into a frame can never turn.
+  // Cars whose meshes don't separate their wheels are absent here and keep theirs baked in; they simply don't spin.
+  let CARWHEELS=null;
+  fetch('assets/cars3d/wheels.json').then(r=>r.json()).then(j=>{CARWHEELS=j;}).catch(()=>{CARWHEELS={};});
+  function carStrip3(id){
+    let s=CARSTRIP[id];
+    if(s===undefined){ const im=new Image(); CARSTRIP[id]=im;
+      im.addEventListener('error',()=>{ CARSTRIP[id]=null; });   // no strip for this car yet → polygon fallback
+      im.src='assets/cars3d/'+id+'.png'; s=im; }
+    return (s&&s.complete&&s.naturalWidth)?s:null;
+  }
+  // ── PLAN PROFILE, MEASURED FROM THE ART ──────────────────────────────────────────────────────────────────────
+  // The 3D chase shell needs to know how long and how wide each car actually is. Hand-entered numbers were wrong by
+  // ~40%: the shell assumed the painted car filled 0.30 of its frame when every sprite measures 0.43, so the body
+  // was far too short and too narrow and the sprite sat over it like a tablecloth. Rather than re-guess, read it
+  // off the alpha channel — the artwork is the authority on its own silhouette, and any sprite added later gets a
+  // correct shell for free. `hw` is a nose→tail half-width profile, so a Corvette's rear haunches and a CT6's slab
+  // sides come out of the drawing instead of a table.
+  // Runs once per car id. Wrapped, because on file:// reading pixels back from an image taints the canvas and
+  // throws — there the caller falls back to the per-model widths in BODY3.
+  const CARPROF={}, PROF_N=16;
+  function carProfile(id,img){
+    if(CARPROF[id]!==undefined)return CARPROF[id];
+    try{
+      const iw=img.naturalWidth||img.width, ih=img.naturalHeight||img.height;
+      if(!iw||!ih){ return null; }                                   // not decoded yet — retry next frame, don't cache
+      const cv=document.createElement('canvas'); cv.width=iw; cv.height=ih;
+      const g=cv.getContext('2d',{willReadFrequently:true}); g.drawImage(img,0,0);
+      const d=g.getImageData(0,0,iw,ih).data, A=140;
+      let y0=ih,y1=-1;
+      for(let y=0;y<ih;y++){ for(let x=0;x<iw;x++) if(d[(y*iw+x)*4+3]>A){ if(y<y0)y0=y; y1=y; break; } }
+      if(y1<0){ CARPROF[id]=null; return null; }
+      const span=y1-y0+1, hw=new Float32Array(PROF_N);
+      for(let b=0;b<PROF_N;b++){
+        const ya=Math.floor(y0+span*b/PROF_N), yb=Math.max(ya+1,Math.ceil(y0+span*(b+1)/PROF_N));
+        let m=0;
+        for(let y=ya;y<yb&&y<=y1;y++){
+          for(let x=0;x<iw;x++) if(d[(y*iw+x)*4+3]>A){ const r=iw*0.5-x; if(r>m)m=r; break; }        // leftmost lit pixel
+          for(let x=iw-1;x>=0;x--) if(d[(y*iw+x)*4+3]>A){ const r=x+1-iw*0.5; if(r>m)m=r; break; } } // rightmost
+        hw[b]=m/iw; }
+      for(let p=0;p<2;p++)                                            // light smoothing — the raw profile is stair-stepped
+        for(let b=1;b<PROF_N-1;b++) hw[b]=hw[b]*0.5+(hw[b-1]+hw[b+1])*0.25;
+      let mx=0; for(let b=0;b<PROF_N;b++) if(hw[b]>mx)mx=hw[b];
+      CARPROF[id]={hl:span/(2*ih), hw:hw, mx:mx};
+    }catch(e){ CARPROF[id]=null; }                                    // tainted canvas (file://) — BODY3 widths take over
+    return CARPROF[id];
+  }
   // TURN frames (front wheels steered) — lazy-loaded from assets/turn/<id>.png; horizontally flipped for the opposite steer
   const CARTURN={};
   function loadTurn(c){ const id=c.id; if(CARTURN[id]!==undefined)return;
@@ -833,6 +932,7 @@
     if(!car.offRoad) car.clean=(car.clean||0)+dt; else car.clean=Math.max(0,(car.clean||0)-dt*2.4);
 
     const latG=Math.max(-1,Math.min(1,car.steerInput*speedFactor*1.05+vR/430)); car.bank+=(latG-car.bank)*Math.min(1,dt*8); car.wheelSteer+=(car.steerInput*0.55-car.wheelSteer)*Math.min(1,dt*14);
+    car._odo=(car._odo||0)+Math.hypot(car.vx,car.vy)*dt;   // feeds wheel spin — see p3Wheel
     const tSlide=Math.max(-0.17,Math.min(0.17, vR/620)); car.slide+=(tSlide-car.slide)*Math.min(1,dt*6); // mild realistic rear-end swing
     // longitudinal weight transfer for suspension squat/dive: pitch>0 = nose dives (brake/decel), pitch<0 = squat (hard accel)
     const _accG=Math.max(-1,Math.min(1,(spd-(car._lastSpd||spd))/Math.max(dt,0.001)/1100)); car._lastSpd=spd;
@@ -886,10 +986,16 @@
       beep(200,0.5,'sawtooth',0.3,900);                                     // core ignition BRAAP (removed the noise up-sweep — that was the whoosh Rob hated)
       beep(64,0.2,'sine',0.3,38);                                           // sub THUMP only (removed the rising air-shimmer that completed the whoosh) — boost still hits with brap + chest thump
       camPunch=Math.max(camPunch,1); ring(car.x,car.y,COL.cyan,700);
-      // IGNITION FLAME — one fat starter puff at the exhaust the frame boost fires (in addition to the expanding cyan ring)
-      trail.push({x:car.x-fx*22,y:car.y-fy*22,r:52,a:1.0,rot:car.a,ignite:1}); }      // *UMUL.boost = Boost upgrade (longer surge)
-    if(car.boostT>0){ car.boostT-=dt; trail.push({x:car.x-fx*34,y:car.y-fy*34,r:28,a:0.9,rot:car.a});
-      if(!lite)trail.push({x:car.x-fx*48+(Math.random()-.5)*12,y:car.y-fy*48+(Math.random()-.5)*12,r:15,a:0.65,rot:car.a});   // second flame puff (FULL/PHOTO) — longer, livelier nitro tail
+      // IGNITION FLAME — one fat starter puff out of each pipe the frame boost fires (plus the expanding cyan ring)
+      { const P=pipeOffset(CARS[playerCar]), sx=-fy, sy=fx;
+        for(const s of [-1,1]) trail.push({x:car.x-fx*P.back+sx*P.side*s, y:car.y-fy*P.back+sy*P.side*s,
+                                           z:P.z, r:34, a:1.0, rot:car.a, ignite:1}); } }   // *UMUL.boost = longer surge
+    if(car.boostT>0){ car.boostT-=dt;
+      const P=pipeOffset(CARS[playerCar]), sx=-fy, sy=fx;
+      for(const s of [-1,1]){
+        trail.push({x:car.x-fx*P.back+sx*P.side*s, y:car.y-fy*P.back+sy*P.side*s, z:P.z, r:19, a:0.9, rot:car.a});
+        if(!lite)trail.push({x:car.x-fx*(P.back+16)+sx*P.side*s+(Math.random()-.5)*9,   // longer, livelier tail behind each pipe
+                             y:car.y-fy*(P.back+16)+sy*P.side*s+(Math.random()-.5)*9, z:P.z, r:11, a:0.65, rot:car.a}); }
       if(Math.random()<0.5)sparks.push({x:car.x,y:car.y,vx:(Math.random()-.5)*160,vy:(Math.random()-.5)*160,a:1,r:2+Math.random()*3}); }
     // ===== BOOST CAPSULES — drive through one for a HYPER surge (also tops up M24.9e). Respawn on a cooldown. =====
     if((car.hyperT||0)>0) car.hyperT-=dt;
@@ -1007,6 +1113,16 @@
     { const dec=(r._lastSpd===undefined?0:(r._lastSpd-rspd0)/Math.max(1e-3,dt));
       if(dec>300)r._brkT=0.22; else r._brkT=Math.max(0,(r._brkT||0)-dt);
       r._brk=r._brkT>0; r._lastSpd=rspd0; }
+    // STEER SIGNAL, same reasoning as the brake one: the chase camera now draws steerable front wheels, and without
+    // this every rival would understeer through corners on locked-straight tires. Derived from how fast the heading
+    // is actually turning, wrapped to ±π so it doesn't spike as the angle rolls over, and smoothed so the wheels
+    // don't twitch on a noisy per-frame delta.
+    { const dA=((r.a-(r._lastA===undefined?r.a:r._lastA)+Math.PI*3)%(Math.PI*2))-Math.PI;
+      const tgt=Math.max(-0.5,Math.min(0.5,dA/Math.max(1e-3,dt)/2.2));
+      r._steer=(r._steer||0)+(tgt-(r._steer||0))*Math.min(1,dt*9); r._lastA=r.a; }
+    // Distance travelled, which is what actually drives wheel spin: θ = distance / radius. Accumulating DISTANCE
+    // rather than an angle keeps it car-agnostic — the renderer divides by whatever radius that model's wheels are.
+    r._odo=(r._odo||0)+rspd0*dt;
     const TI=i=>OPEN?Math.max(0,Math.min(TN-1,i)):((i%TN)+TN)%TN;
     const apexI=TI(nr+LA); let tgx=TRACK[apexI].x, tgy=TRACK[apexI].y;
     { const mA=TRACK[TI(nr+Math.round(LA*0.4))], mC=TRACK[TI(nr+LA+Math.round(LA*0.6))];   // concavity vector points to the INSIDE of the curve (≈0 on straights → robust, no sign guessing)
@@ -1634,6 +1750,56 @@
     p3Poly(4); ctx.fill();
     return {X,Y};
   }
+  // A ROAD WHEEL. Real geometry, not a decal: the wheel lives in the vertical plane that contains its own rolling
+  // direction (`wa` = car heading + steer), hub at z=R, so perspective foreshortens it exactly like everything else.
+  // Two parts, because those are the two a chase camera actually sees — the TREAD arc looked down on from above, and
+  // the SIDEWALL of whichever face is turned toward the lens. Drawing the whole cylinder would be wasted polygons.
+  // Wheels are the single biggest reason a car reads as a car instead of a crate: they break the body's rectangular
+  // silhouette at all four corners and put daylight under the chassis.
+  function p3Wheel(cx,cy,wa,R,hw,sd,treadCol,sideCol,rimCol,detail,spin){
+    const wc=Math.cos(wa), ws=Math.sin(wa), nx=-ws, ny=wc;      // rolling axis / axle axis
+    const N=detail?9:6;
+    ctx.fillStyle=treadCol; ctx.beginPath();                     // tread: the upper half-arc, front → top → rear
+    for(let i=0;i<N;i++){
+      const a0=Math.PI*(i/N), a1=Math.PI*((i+1)/N);
+      const x0=cx+wc*R*Math.cos(a0), y0=cy+ws*R*Math.cos(a0), z0=R+R*Math.sin(a0);
+      const x1=cx+wc*R*Math.cos(a1), y1=cy+ws*R*Math.cos(a1), z1=R+R*Math.sin(a1);
+      p3Set(0,x0+nx*hw,y0+ny*hw,z0); p3Set(1,x1+nx*hw,y1+ny*hw,z1);
+      p3Set(2,x1-nx*hw,y1-ny*hw,z1); p3Set(3,x0-nx*hw,y0-ny*hw,z0); p3Poly(4); }
+    ctx.fill();
+    // Always the OUTBOARD sidewall. Strictly it is back-facing from a lens sitting inboard of the wheel, but it is
+    // the face that forms the tire's silhouette — filling that disc is what makes the wheel read as round instead of
+    // as a thin strip of tread. The inboard face is buried under the floor pan and never worth an emit.
+    const ox=nx*hw*sd, oy=ny*hw*sd;
+    // A point on the wheel's own face: p runs along the rolling axis, q is height above the hub. Working in these
+    // two local numbers keeps the spokes honest — they orbit the hub in the wheel's plane, so they foreshorten
+    // with the wheel instead of sliding across it.
+    const emit=(i,p,q,off)=>p3Set(i, cx+wc*p+ox*off, cy+ws*p+oy*off, R+q);
+    const ring=(rad,off,n)=>{ const N2=n||12; for(let i=0;i<N2;i++){ const a=i/N2*Math.PI*2;
+      emit(i, rad*Math.cos(a), rad*Math.sin(a), off); } return p3Poly(N2); };
+    ctx.fillStyle=sideCol; ctx.beginPath(); ring(R,1); ctx.fill();
+    // The body is baked with a real shadow map, so a flat-filled tyre next to it reads as a cardboard cut-out. A
+    // single lit crescent across the upper sidewall is enough to make it round and to sit it in the same light.
+    if(detail){ ctx.fillStyle='rgba(150,162,190,0.16)'; ctx.beginPath();
+      for(let i=0;i<=8;i++){ const a=Math.PI*(0.08+0.84*i/8); emit(i, R*0.97*Math.cos(a), R*0.97*Math.sin(a), 1.02); }
+      for(let i=8;i>=0;i--){ const a=Math.PI*(0.08+0.84*i/8); emit(17-i, R*0.66*Math.cos(a), R*0.66*Math.sin(a), 1.02); }
+      p3Poly(18); ctx.fill(); }
+    // Rim held small and DARK. At 0.62R in a light grey it left a bright annulus between the black sidewall and the
+    // black hub, and the wheels read as pale donuts bolted to the car rather than as tires.
+    if(detail){
+      ctx.fillStyle=night?'#767c8c':'#a8aec0'; ctx.beginPath(); ring(R*0.60,1.03); ctx.fill();  // bright lip, catches the key
+      ctx.fillStyle=rimCol; ctx.beginPath(); ring(R*0.52,1.04); ctx.fill();
+      // FIVE SPOKE GAPS, orbiting with `spin`. Cut as dark holes rather than drawn as bright spokes: at the ~15px
+      // a wheel occupies, voids read and thin bright bars just alias into a shimmer. This is the only thing that
+      // makes the car look like it is ROLLING rather than skating — the tyre itself is round and gives nothing away.
+      const sp=spin||0;
+      ctx.fillStyle='#0d0d13'; ctx.beginPath();
+      for(let k=0;k<5;k++){ const a=sp+k*Math.PI*0.4, p0=Math.cos(a)*R*0.32, q0=Math.sin(a)*R*0.32;
+        for(let i=0;i<7;i++){ const t=i/7*Math.PI*2; emit(i, p0+Math.cos(t)*R*0.15, q0+Math.sin(t)*R*0.15, 1.06); }
+        p3Poly(7); }
+      ctx.fill();
+      ctx.fillStyle='#15151d'; ctx.beginPath(); ring(R*0.17,1.10,8); ctx.fill(); }
+  }
 
   // Which slice of the track is in front of the lens, and how far each node sits — recomputed once a frame and
   // reused by every road layer so the strip is only walked one time.
@@ -1940,8 +2106,8 @@
         case 'deco':  p3Billboard(o.r.x,o.r.y,()=>p3DecoArt(o.r),3.2); break;
         case 'lamp':  p3Billboard(o.r.x,o.r.y,()=>p3LampArt(o.r),3.0); break;
         case 'player':p3Car(car.x,car.y,car.a,CARS[playerCar],true); break;
-        case 'rival': p3Car(o.r.x,o.r.y,o.r.a,CARS[o.r.carIdx||0],false,false,!!o.r._brk); break;
-        case 'cop':   p3Car(o.r.x,o.r.y,o.r.a,{id:'ct6',s:0.150},false,true,!!o.r._brk); break;
+        case 'rival': p3Car(o.r.x,o.r.y,o.r.a,CARS[o.r.carIdx||0],false,false,!!o.r._brk,o.r._steer,o.r._odo); break;
+        case 'cop':   p3Car(o.r.x,o.r.y,o.r.a,{id:'ct6',s:0.150},false,true,!!o.r._brk,o.r._steer,o.r._odo); break;
         case 'smoke': { const p=o.r; p3(p.x,p.y,14); ctx.globalAlpha=p.a*0.5; ctx.fillStyle=p.col||(night?'#9fb0d0':'#c9bfe0'); ctx.beginPath(); ctx.arc(p3x,p3y,Math.max(0.6,p.r*p3s),0,7); ctx.fill(); ctx.globalAlpha=1; break; }
         // Nitro jet — flattened onto the road plane and kept small. Screen-space radii blew up into a white blob
         // because the exhaust sits a couple of car-lengths from the lens where the perspective scale is largest.
@@ -1969,10 +2135,10 @@
             p3Quad(p.x+_sx*_a0, p.y+_sy*_a0,
                    p.x-_sx*_a0, p.y-_sy*_a0,
                    p.x-_ex*_l-_sx*_a1, p.y-_ey*_l-_sy*_a1,
-                   p.x-_ex*_l+_sx*_a1, p.y-_ey*_l+_sy*_a1, 13);
+                   p.x-_ex*_l+_sx*_a1, p.y-_ey*_l+_sy*_a1, p.z||13);   // burns at the pipe's own height
             ctx.fill(); }
           // IGNITION BALL — the SHIFT-press puff gets a bloom at the nozzle so the burn starts with a bang
-          if(p.ignite){ p3(p.x,p.y,15);
+          if(p.ignite){ p3(p.x,p.y,(p.z||13)+2);
             if(p3s>0){ const _R=Math.min(60,Math.max(1,p.r*p3s*0.62));
               const _g=ctx.createRadialGradient(p3x,p3y,0,p3x,p3y,_R);
               _g.addColorStop(0,'rgba(255,248,214,'+(_life*0.85).toFixed(3)+')');
@@ -2366,21 +2532,82 @@
     ctx.fillStyle=night?'#ffe6a6':'#c8ccd6'; ctx.beginPath(); ctx.ellipse(11,-63,3.4,1.9,0,0,7); ctx.fill();
     if(night){ ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=0.8; ctx.fillStyle='#ffdca0'; ctx.beginPath(); ctx.arc(11,-63,6,0,7); ctx.fill(); ctx.restore(); }
   }
-  // A car as a box with the top-down sprite mapped onto its roof. Projecting the roof's own axes gives an affine
-  // basis, so the sprite lies on the car properly — foreshortened and rotating with it — instead of floating flat.
-  const CARZ=21;   // roof height in world units — kept low so the body's side walls stay slim from a high chase angle
-  function p3Car(wx,wy,ang,cdef,isPlayer,isCop,brk){
+  // Roof height, as a fraction of the sprite frame's world size — so it scales with each car instead of being one
+  // flat number for a Lambo and a full-size sedan alike. Painted length is 0.86 of that frame, so 0.25 here lands
+  // at 0.29 of the car's own length; a real Camaro is 0.28. It was previously 0.18, deliberately squashed because a
+  // straight-sided prism showed too much flat side wall. With a tapered shell on real wheels there is nothing to hide.
+  const CARH=0.195;
+  // Where the bodywork stops being full-width and the greenhouse starts, as a fraction of roof height, and how far
+  // the cabin tucks in above it. WITHOUT this the shell is one full-width volume all the way to the roof — which is
+  // the exact recipe for a minivan, and is precisely what it looked like. A car is a wide body with a narrow glass
+  // house sitting on it, and that step at the shoulder is most of what separates the two shapes.
+  const BELT=0.52, CABIN_TUCK=0.36;
+  const wMul=zf=>1-CABIN_TUCK*Math.max(0,Math.min(1,(zf-BELT)/(1-BELT)));
+  // ── PER-MODEL BODY SIGNATURES ────────────────────────────────────────────────────────────────────────────────
+  // Every car used to get the SAME shell: one width, one flat roof height, one Camaro tail. From above the sprite
+  // carried the identity; from behind and from the side every car in the garage was the same object in a different
+  // colour. This table is the side-and-plan view the sprite cannot give.
+  //
+  //   st: longitudinal stations, nose → tail, each [u, halfWidthFrac, roofHeightFrac].
+  //       u    +1 nose … -1 tail        w   fraction of the body half-width      z   fraction of CARZ
+  //       The z column IS the roofline — hood height, windscreen base, roof peak, decklid, tail. It is what makes a
+  //       Lambo a wedge and a CT6 a three-box sedan, and it is read at a glance from a chase camera.
+  //   lamp: which rear-light signature to build (see LAMPS3). This is the single most recognisable part of any car
+  //       from directly behind, which is exactly the view this camera lives in.
+  //   wing: ducktail / spoiler lip height as a fraction of CARZ, standing above the decklid station.
+  const BODY3={
+    // long hood, high beltline, fast roofline dropping into a ducktail
+    camaro:   {lamp:'quad',  wing:0.055, st:[[1.00,0.70,0.36],[0.74,0.88,0.42],[0.44,0.97,0.48],[0.20,1.00,0.86],[-0.16,1.00,1.00],[-0.52,0.99,0.92],[-0.80,0.96,0.76],[-1.00,0.88,0.70]]},
+    // four-door: cabin sits further back, roof runs flatter and longer, full-width light bar
+    charger:  {lamp:'bar',   wing:0.028, st:[[1.00,0.72,0.34],[0.70,0.90,0.40],[0.36,0.98,0.46],[0.10,1.00,0.90],[-0.34,1.00,1.00],[-0.66,0.98,0.88],[-0.88,0.95,0.72],[-1.00,0.90,0.68]]},
+    // retro coupe: longest hood of the muscle set, deliberately FLAT roof, upright tail
+    challenger:{lamp:'split',wing:0.020, st:[[1.00,0.72,0.36],[0.70,0.90,0.42],[0.34,0.98,0.48],[0.14,1.00,0.92],[-0.30,1.00,1.00],[-0.64,0.99,0.94],[-0.88,0.96,0.76],[-1.00,0.90,0.72]]},
+    // mid-engine: stub nose, cab-forward glass, and the widest rear haunches in the game
+    corvette: {lamp:'round', wing:0.070, st:[[1.00,0.66,0.30],[0.78,0.86,0.34],[0.52,0.96,0.62],[0.20,0.98,0.86],[-0.12,0.96,0.92],[-0.44,1.00,0.80],[-0.78,1.00,0.72],[-1.00,0.92,0.66]]},
+    // GT: three-box, long deck behind the cabin, calmer than the muscle cars
+    m6:       {lamp:'lshape',wing:0.030, st:[[1.00,0.70,0.34],[0.72,0.90,0.40],[0.40,0.98,0.46],[0.14,1.00,0.88],[-0.24,1.00,1.00],[-0.60,0.98,0.86],[-0.86,0.95,0.72],[-1.00,0.88,0.68]]},
+    // hypercar: lowest roof, bubble canopy well forward, chopped-off Kamm tail
+    '918':    {lamp:'slim',  wing:0.085, st:[[1.00,0.64,0.26],[0.76,0.86,0.30],[0.48,0.96,0.56],[0.16,0.96,0.88],[-0.16,0.94,0.90],[-0.48,1.00,0.72],[-0.80,1.00,0.62],[-1.00,0.90,0.56]]},
+    // wedge: one unbroken rising line from the nose, hard shoulders, engine deck behind the glass
+    lambo:    {lamp:'hex',   wing:0.075, st:[[1.00,0.62,0.24],[0.78,0.86,0.28],[0.50,0.96,0.58],[0.18,0.96,0.86],[-0.14,0.94,0.88],[-0.46,1.00,0.70],[-0.82,1.00,0.60],[-1.00,0.88,0.54]]},
+    // full-size sedan: tallest and most upright of the roster, slab sides, vertical lamps
+    ct6:      {lamp:'vert',  wing:0.018, st:[[1.00,0.74,0.40],[0.70,0.92,0.46],[0.34,0.99,0.52],[0.06,1.00,0.96],[-0.36,1.00,1.00],[-0.68,0.98,0.90],[-0.90,0.95,0.78],[-1.00,0.90,0.74]]},
+  };
+  BODY3.zl1violet=BODY3.camaro;   // same shell, different paint
+  // Rear-light signatures, authored in the rear face's own (across u, up t) fractions. `cut` adds the dark divisions
+  // that make a lamp read as a real cluster instead of a glowing rectangle: 'cross' quarters it, 'ribs' splits it
+  // vertically. Everything stays a SMALL BRIGHT ACCENT on a mostly dark tail — the old failure here was lamps big
+  // enough to turn the whole rear of the car into one red box.
+  const LAMPS3={
+    quad:  {cut:'cross', cells:[[0.115,0.405,0.50,0.70],[0.595,0.885,0.50,0.70]]},
+    bar:   {cut:'ribs',  cells:[[0.075,0.925,0.525,0.665]]},
+    split: {cut:'ribs',  cells:[[0.100,0.440,0.50,0.70],[0.560,0.900,0.50,0.70]]},
+    round: {cut:'none',  cells:[[0.100,0.225,0.495,0.675],[0.265,0.390,0.495,0.675],[0.610,0.735,0.495,0.675],[0.775,0.900,0.495,0.675]]},
+    lshape:{cut:'none',  cells:[[0.085,0.400,0.545,0.675],[0.085,0.180,0.450,0.545],[0.600,0.915,0.545,0.675],[0.820,0.915,0.450,0.545]]},
+    slim:  {cut:'none',  cells:[[0.075,0.425,0.565,0.645],[0.575,0.925,0.565,0.645]]},
+    hex:   {cut:'none',  cells:[[0.100,0.365,0.500,0.575],[0.135,0.330,0.585,0.685],[0.635,0.900,0.500,0.575],[0.670,0.865,0.585,0.685]]},
+    vert:  {cut:'ribs',  cells:[[0.055,0.170,0.360,0.755],[0.830,0.945,0.360,0.755]]},
+  };
+  function p3Car(wx,wy,ang,cdef,isPlayer,isCop,brk,st,odo0){
     const ca=Math.cos(ang), sa=Math.sin(ang);
-    // Body box sized to the PAINTED car, not to the sprite frame. The sprite is 1024px of mostly transparent
-    // padding; at 0.40 the box was longer than the artwork sitting on it, so it stuck out front and back and read
-    // as a separate black crate under the car. 0.30 matches the visible bodywork.
-    const L=1024*cdef.s*CARSCALE*0.30, Wd=L*0.44;   // half-length / half-width of the body box in world units
+    // Shell sized to the PAINTED car, measured off the sprite's alpha rather than guessed. Every sprite is mostly
+    // transparent padding; the hand-entered 0.30 assumed the bodywork filled less of its frame than it does, and at
+    // the real 0.43 the shell finally reaches the edges of the art instead of hiding under it.
+    const SPW=1024*cdef.s*CARSCALE;                                    // world size of the whole sprite frame
+    const _img0=isCop?CARIMG['ct6']:carSprite(cdef);
+    const PRF=spriteReady(_img0)?carProfile(cdef.turnFrom||cdef.id,_img0):null;
+    const L=SPW*(PRF?PRF.hl:0.430), CZ=SPW*CARH;                       // half-length, roof height
+    const Wd=SPW*(PRF?PRF.mx:0.205);                                   // widest half-width anywhere along the car
     const fx=ca*L, fy=sa*L, rx=-sa*Wd, ry=ca*Wd;
+    // BODY-LOCAL FRAME. u runs +1 nose / -1 tail, v runs +1 right / -1 left, both as fractions of the half-extents.
+    // Every panel below is authored in these fractions so the whole shape scales with any car's sprite size.
+    const bux=-sa, buy=ca;
+    const PX=(u,v)=>wx+ca*L*u+bux*Wd*v, PY=(u,v)=>wy+sa*L*u+buy*Wd*v;
+    const RT=L*0.140, ZS=RT*1.02;   // tire radius (≈0.66m at this scale), and the rocker the bodywork starts at
     // SUSPENSION PITCH. car.pitch is already solved by the physics (>0 nose-dives on the brakes, <0 squats under
     // power). Here it becomes real geometry: the nose lifts and the tail drops, so the car visibly sits back as it
     // launches and noses down when you stand on the brakes.
-    const pit=isPlayer?Math.max(-1,Math.min(1,car.pitch||0)):0;
-    const zF=CARZ-pit*8, zR=CARZ+pit*8;   // front / rear roof height
+    const pit=isPlayer?Math.max(-1,Math.min(1,car.pitch||0)):0;   // fed into every station height via _pz() below
     // CONTACT SHADOW — a broad soft patch to seat the car in the scene plus a tight dark core right under the body.
     // The tight core is what stops it reading as though it's hovering a foot above the tarmac.
     ctx.fillStyle='#000';
@@ -2412,51 +2639,213 @@
                ox+ca*HL*0.55+ux*HW1*0.42, oy+sa*HL*0.55+uy*HW1*0.42, 0.7);
         ctx.fill(); }
       ctx.restore(); ctx.globalAlpha=1; }
-    // dark body sides so the car has volume rather than reading as a decal — roof corners carry the pitch
-    const c0x=wx+fx+rx, c0y=wy+fy+ry, c1x=wx+fx-rx, c1y=wy+fy-ry, c2x=wx-fx-rx, c2y=wy-fy-ry, c3x=wx-fx+rx, c3y=wy-fy+ry;
-    // DIRECTIONAL BODY SHADING. All four flanks took one identical flat colour, so the bodywork read as a black
-    // cutout parked under the sprite. Lit against the same key the buildings use, so the car sits in the same world
-    // rather than looking composited into it — and the sunward flank now brightens as you turn through a corner.
-    const _bc=(nxx,nyy)=>{ const l=Math.hypot(nxx,nyy)||1, d=(nxx/l)*SUN3.x+(nyy/l)*SUN3.y;
-      const k=Math.max(0,Math.min(1,0.5+d*0.5));
-      const v=(isCop?7:9)+k*(isCop?12:16)|0;
-      return 'rgb('+v+','+v+','+(v+6)+')'; };
-    ctx.fillStyle=_bc(fx,fy);   ctx.beginPath();
-    p3Set(0,c0x,c0y,0); p3Set(1,c1x,c1y,0); p3Set(2,c1x,c1y,zF); p3Set(3,c0x,c0y,zF); p3Poly(4); ctx.fill();   // nose
-    ctx.fillStyle=_bc(-rx,-ry); ctx.beginPath();
-    p3Set(0,c1x,c1y,0); p3Set(1,c2x,c2y,0); p3Set(2,c2x,c2y,zR); p3Set(3,c1x,c1y,zF); p3Poly(4); ctx.fill();   // flank
-    ctx.fillStyle=_bc(-fx,-fy); ctx.beginPath();
-    p3Set(0,c2x,c2y,0); p3Set(1,c3x,c3y,0); p3Set(2,c3x,c3y,zR); p3Set(3,c2x,c2y,zR); p3Poly(4); ctx.fill();   // tail
-    ctx.fillStyle=_bc(rx,ry);   ctx.beginPath();
-    p3Set(0,c3x,c3y,0); p3Set(1,c0x,c0y,0); p3Set(2,c0x,c0y,zF); p3Set(3,c3x,c3y,zR); p3Poly(4); ctx.fill();   // flank
-    // SHOULDER LINE. A hard highlight where the flank meets the roof — the single cue that separates glossy
+    // ── BAKED TURNTABLE PATH ──────────────────────────────────────────────────────────────────────────────────
+    // If this car has a baked strip, it IS the car — a render of a real mesh from this camera's own tilt — and the
+    // whole polygon shell below is skipped. Everything that has to stay LIVE (contact shadow, headlight throw,
+    // brake lights) is drawn around it, because none of that can be frozen into a static frame.
+    { const sid=isCop?'copcar':(cdef.turnFrom||cdef.id), STR=carStrip3(sid);
+      if(STR){
+        const rel=ang-camAng;                                   // 0 ⇒ pointing straight away from the lens
+        // SUB-FRAME ROTATION. 48 frames is 7.5° a step, so through a drift the car HOLDS an angle for several
+        // frames and then jumps — it reads as snapping, and no realistic frame count fixes it (even 96 still steps
+        // visibly at 240mph). Instead: take the nearest frame, then rotate the drawn cell by whatever yaw is left
+        // over. At the rig's 36.3° tilt a yaw change shows up in-plane scaled by sin(tilt) — exactly 0° of it at
+        // the horizon, all of it from straight above — and over a residual of ±3.75° that approximation is
+        // invisible. Continuous rotation from a quantised strip, at no extra asset cost.
+        const exact=(rel*STRIP3.dir/(Math.PI*2)+STRIP3.phase)*STRIP3.frames;
+        let fi=Math.round(exact)%STRIP3.frames;
+        if(fi<0)fi+=STRIP3.frames;
+        const resid=(exact-Math.round(exact))/STRIP3.frames*Math.PI*2*Math.sin(STRIP3.tilt);
+        // LIVE WHEELS, drawn BEFORE the body so the baked arches frame them. The body was baked without wheels
+        // precisely so these can steer and roll; anything outside the body silhouette stays visible, which is
+        // exactly the part of a wheel you see from behind.
+        const WM=CARWHEELS&&CARWHEELS[sid], _wcd=Math.hypot(wx-P3.cx,wy-P3.cy);
+        if(WM&&_wcd<2600){
+          const steer=Math.max(-0.5,Math.min(0.5,(isPlayer?(car.wheelSteer||0):(st||0))*0.85));
+          const odo=isPlayer?(car._odo||0):(odo0||0);
+          const det=!lite&&_wcd<1100;
+          const tread=night?'#08080d':'#0d0d14', wall=night?'#121219':'#191921';
+          const rim=isCop?'#8f95a4':(night?'#3e424e':'#5c6170');
+          for(const w of WM){
+            const rW=w.r*L, spin=odo/Math.max(1e-3,rW);         // rolling without slipping: θ = distance / radius
+            const wa=ang+(w.u>0?steer:0);                        // only the front pair steers
+            p3Wheel(wx+ca*L*w.u+bux*L*w.v, wy+sa*L*w.u+buy*L*w.v, wa,
+                    rW, Math.max(1,w.w*L), w.v>0?1:-1, tread, wall, rim, det, spin);
+          }
+        }
+        p3(wx,wy,0);                                            // ground centre: the point every frame is aimed at
+        if(p3s>0){
+          const cw=STRIP3.cover*2*L*p3s, ch=cw*STRIP_YS, C=STRIP3.cell;   // cell spans `cover` car-lengths
+          if(Math.abs(resid)>0.002){                            // spin the cell about the car's own ground anchor
+            ctx.save(); ctx.translate(p3x,p3y); ctx.rotate(resid);
+            ctx.drawImage(STR,fi*C,0,C,C, -cw*0.5, -ch*0.5, cw, ch); ctx.restore();
+          } else ctx.drawImage(STR,fi*C,0,C,C, p3x-cw*0.5, p3y-ch*0.5, cw, ch);
+        }
+        const braking=isPlayer?K.brake:!!brk;
+        if((braking||night)&&!lite){                            // lamps are geometry in the bake; the GLOW must be live
+          p3(wx-ca*L*0.94,wy-sa*L*0.94,CZ*0.55);
+          if(p3s>0){
+            const rad=Math.max(2.5,Wd*1.5*p3s), gi=braking?0.85:0.30;
+            ctx.save(); ctx.globalCompositeOperation='lighter';
+            const g=ctx.createRadialGradient(p3x,p3y,0,p3x,p3y,rad);
+            g.addColorStop(0,isCop?'rgba(120,170,255,'+gi+')':'rgba(255,86,56,'+gi+')');
+            g.addColorStop(0.5,isCop?'rgba(60,110,255,'+(gi*0.28).toFixed(3)+')':'rgba(212,34,20,'+(gi*0.3).toFixed(3)+')');
+            g.addColorStop(1,'rgba(0,0,0,0)');
+            ctx.fillStyle=g; ctx.beginPath(); ctx.arc(p3x,p3y,rad,0,7); ctx.fill();
+            ctx.restore(); } }
+        return;
+      } }
+    // ── THE MODEL'S OWN SHAPE ─────────────────────────────────────────────────────────────────────────────────
+    // Declared up here rather than with the bodywork below, because the WHEELS need to know how wide the car is at
+    // the axle line before they can be placed — and a `const` used above its declaration is a temporal-dead-zone
+    // throw, not a hoist.
+    const BD=BODY3[cdef.id]||BODY3.camaro, SN=BD.st, NS=SN.length;
+    const _pz=u=>-pit*8*u;                                    // suspension pitch, applied about the car's centre
+    const _lerp=(u,k)=>{ const S=SN;                          // sample the profile between stations (k: 1=width, 2=height)
+      if(u>=S[0][0])return S[0][k];
+      for(let i=1;i<NS;i++) if(u>=S[i][0]){ const t=(u-S[i][0])/(S[i-1][0]-S[i][0]);
+        return S[i][k]+(S[i-1][k]-S[i][k])*t; }
+      return S[NS-1][k]; };
+    // Height comes from BODY3 (a top-down sprite can never supply a roofline); WIDTH comes from the sprite's own
+    // measured plan profile, falling back to the table's width column when the pixels are unreadable (file://).
+    const zAtU=u=>CZ*_lerp(u,2)+_pz(u);
+    const wAtU=PRF?(u=>{ const f=(1-Math.max(-1,Math.min(1,u)))*0.5*PROF_N-0.5;
+        const i=Math.max(0,Math.min(PROF_N-1,Math.floor(f))), j=Math.min(PROF_N-1,i+1), t=Math.max(0,Math.min(1,f-i));
+        return (PRF.hw[i]+(PRF.hw[j]-PRF.hw[i])*t)/PRF.mx; })
+      :(u=>_lerp(u,1));
+    // ── ROLLING GEAR + CHASSIS ────────────────────────────────────────────────────────────────────────────────
+    // The old body was one straight extruded prism from the tarmac to the roof: same width top and bottom, square
+    // corners, no wheels, no gap underneath. From a chase camera that is, literally, a box. Three things fix it and
+    // they have to be done together — wheels standing proud at the corners, a chassis that TUCKS IN below the
+    // shoulder so the wheels have somewhere to sit, and daylight under the floor.
+    const _cd=Math.hypot(wx-P3.cx,wy-P3.cy);
+    const _wDet=!lite&&_cd<1100;                                   // rim spokes only close up; the arc still reads far out
+    if(_cd<2600){
+      const steer=Math.max(-0.5,Math.min(0.5,(isPlayer?(car.wheelSteer||0):(st||0))*0.85));
+      const TW=Wd*0.135, tread=night?'#08080d':'#0d0d14', wall=night?'#121219':'#191921';
+      const rim=isCop?'#8f95a4':(night?'#3e424e':'#5c6170');
+      // Tucked INSIDE the bodywork at that station, not parked at the car's widest point — a flat offset puts the
+      // front wheels outboard of a tapering nose and the car grows visible outriggers.
+      for(const w of [[-0.60,1,ang],[-0.60,-1,ang],[0.62,1,ang+steer],[0.62,-1,ang+steer]]){
+        const v=w[1]*wAtU(w[0])*0.98;   // flush with that station's bodywork: any further in and the tire vanishes
+        p3Wheel(PX(w[0],v),PY(w[0],v),w[2],RT,TW,w[1],tread,wall,rim,_wDet); }
+      // FLOOR PAN — a dark inset slab from the tarmac up to the rocker. Its whole job is to be the shadow you see
+      // BETWEEN the tires, which is what tells the eye the body is carried on suspension instead of resting on the road.
+      p3Box(wx,wy,L*0.94,Wd*0.70,ang,0,ZS,'#08070d','#08070d',false);
+    }
+    // ── BODYWORK: A SWEPT SHELL, ONE PER MODEL ────────────────────────────────────────────────────────────────
+    // The shell is no longer a box of any kind. It is swept along the model's own longitudinal stations (BODY3), so
+    // the hood sits low, the cabin rises, the roof falls away into a decklid, and the haunches swell where that car
+    // actually swells. That profile is the thing an eye recognises at a glance — a Lambo is a wedge and a CT6 is a
+    // three-box sedan long before you can read a badge on either. (BD / SN / zAtU / wAtU are declared further up,
+    // because the wheels need the car's width before they can be positioned.)
+    // Station geometry, precomputed once. TWO rails per side, not one: the BODY rail at the car's full painted width
+    // and the CABIN rail tucked in above the belt line. Where a station has no greenhouse (hood, decklid) the two
+    // coincide and the glass band collapses to nothing, so the same loop draws a coupe and a sedan without a branch.
+    const sRX=[],sRY=[],sLX=[],sLY=[],sCRX=[],sCRY=[],sCLX=[],sCLY=[],sZT=[],sZB=[],sZK=[],sHW=[],sCW=[];
+    for(let i=0;i<NS;i++){ const u=SN[i][0], zf=SN[i][2], hw=wAtU(u), cw=hw*wMul(zf), pz=_pz(u);
+      sHW[i]=hw; sCW[i]=cw;
+      sRX[i]=PX(u,hw);  sRY[i]=PY(u,hw);  sLX[i]=PX(u,-hw);  sLY[i]=PY(u,-hw);
+      sCRX[i]=PX(u,cw); sCRY[i]=PY(u,cw); sCLX[i]=PX(u,-cw); sCLY[i]=PY(u,-cw);
+      sZT[i]=CZ*zf+pz; sZB[i]=ZS+pz; sZK[i]=Math.min(sZT[i],CZ*BELT+pz); }   // zK = belt line: body below, glass above
+    // tail-station corners, kept under the old names because the rear-face block still uses them for its facing test
+    const c2x=sLX[NS-1],c2y=sLY[NS-1], c3x=sRX[NS-1],c3y=sRY[NS-1];
+    // DIRECTIONAL BODY SHADING, in the car's OWN paint. Flat near-black flanks were the other half of the box read —
+    // a real car's sides are its colour, just heavily shaded. Lit against the same world key the buildings use, so
+    // the sunward flank brightens as you turn through a corner and the car sits in the scene instead of on it.
+    const _h=(isCop?'#20242e':(cdef.tint||cdef.color||'#3a3a44')).replace('#','');
+    const BR=parseInt(_h.slice(0,2),16)||40, BG=parseInt(_h.slice(2,4),16)||40, BB=parseInt(_h.slice(4,6),16)||48;
+    const _bc=(nxx,nyy,lift)=>{ const l=Math.hypot(nxx,nyy)||1, d=(nxx/l)*SUN3.x+(nyy/l)*SUN3.y;
+      const k=Math.max(0,Math.min(1,0.5+d*0.5)), m=(0.15+k*0.50)*(lift||1);
+      return 'rgb('+(BR*m+7|0)+','+(BG*m+7|0)+','+(BB*m+9|0)+')'; };
+    // FLANKS, in the three surfaces a car actually has on its side: BODY from the rocker to the belt, a SHOULDER
+    // DECK stepping inward at the belt, and GLASS rising from there to the roof. Drawing one full-height wall
+    // instead — which is what was here — is exactly why these read as minivans: no step, no glasshouse, just a
+    // tall slab with a picture on top.
+    const GLASS=night?'#0d0f18':'#191d2b', GLASSLIT=night?'#1b2033':'#2b3247';
+    const _flank=(AX,AY,CX2,CY2,nxx,nyy)=>{
+      const mx=(AX[0]+AX[NS-1])*0.5, my=(AY[0]+AY[NS-1])*0.5;
+      if((mx-P3.cx)*(mx-wx)+(my-P3.cy)*(my-wy)>=0)return;      // this whole side is turned away from the lens
+      ctx.fillStyle=_bc(nxx,nyy); ctx.beginPath();             // body side, rocker → belt
+      for(let i=0;i<NS-1;i++){ p3Set(0,AX[i],AY[i],sZB[i]); p3Set(1,AX[i+1],AY[i+1],sZB[i+1]);
+        p3Set(2,AX[i+1],AY[i+1],sZK[i+1]); p3Set(3,AX[i],AY[i],sZK[i]); p3Poly(4); }
+      ctx.fill();
+      ctx.fillStyle=_bc(nxx,nyy,0.58); ctx.beginPath();        // rocker skirt — always in the body's own shadow
+      for(let i=0;i<NS-1;i++){ p3Set(0,AX[i],AY[i],sZB[i]-ZS*0.72); p3Set(1,AX[i+1],AY[i+1],sZB[i+1]-ZS*0.72);
+        p3Set(2,AX[i+1],AY[i+1],sZB[i+1]); p3Set(3,AX[i],AY[i],sZB[i]); p3Poly(4); }
+      ctx.fill();
+      ctx.fillStyle=_bc(nxx,nyy,1.25); ctx.beginPath();        // shoulder deck: the step in at the belt line
+      for(let i=0;i<NS-1;i++){ p3Set(0,AX[i],AY[i],sZK[i]); p3Set(1,AX[i+1],AY[i+1],sZK[i+1]);
+        p3Set(2,CX2[i+1],CY2[i+1],sZK[i+1]); p3Set(3,CX2[i],CY2[i],sZK[i]); p3Poly(4); }
+      ctx.fill();
+      ctx.fillStyle=GLASS; ctx.beginPath();                    // side glass, belt → roof (zero-area over hood/deck)
+      for(let i=0;i<NS-1;i++){ p3Set(0,CX2[i],CY2[i],sZK[i]); p3Set(1,CX2[i+1],CY2[i+1],sZK[i+1]);
+        p3Set(2,CX2[i+1],CY2[i+1],sZT[i+1]); p3Set(3,CX2[i],CY2[i],sZT[i]); p3Poly(4); }
+      ctx.fill(); };
+    _flank(sRX,sRY,sCRX,sCRY, rx, ry);
+    _flank(sLX,sLY,sCLX,sCLY,-rx,-ry);
+    ctx.fillStyle=_bc(fx,fy); ctx.beginPath();                 // nose cap
+    p3Set(0,sLX[0],sLY[0],sZB[0]); p3Set(1,sRX[0],sRY[0],sZB[0]);
+    p3Set(2,sRX[0],sRY[0],sZT[0]); p3Set(3,sLX[0],sLY[0],sZT[0]); p3Poly(4); ctx.fill();
+    ctx.fillStyle=_bc(0,0,0.85); ctx.beginPath();              // upper surface (roof + hood + deck): backing for the sprite
+    for(let i=0;i<NS-1;i++){ p3Set(0,sCLX[i],sCLY[i],sZT[i]); p3Set(1,sCRX[i],sCRY[i],sZT[i]);
+      p3Set(2,sCRX[i+1],sCRY[i+1],sZT[i+1]); p3Set(3,sCLX[i+1],sCLY[i+1],sZT[i+1]); p3Poly(4); }
+    ctx.fill();
+    // SHOULDER LINE. A hard highlight where the flank meets the upper surface — the single cue that separates glossy
     // paintwork from a matte block. Only on the sunward side, which is what keeps it reading as a reflection.
     if(!lite){
-      p3(wx,wy,CARZ); const _cs=p3s;   // explicit projection: p3s otherwise still holds whatever the last call left
+      p3(wx,wy,CZ); const _cs=p3s;   // explicit projection: p3s otherwise still holds whatever the last call left
       if(_cs>0){
-        const sl=(ax,ay,bx,by,az,bz,nxx,nyy)=>{ const l=Math.hypot(nxx,nyy)||1;
+        const sl=(AX,AY,ZZ,nxx,nyy)=>{ const l=Math.hypot(nxx,nyy)||1;
           if(((nxx/l)*SUN3.x+(nyy/l)*SUN3.y)<0.05)return;
-          p3(ax,ay,az); if(p3s<=0)return; const X=p3x,Y=p3y; p3(bx,by,bz); if(p3s<=0)return;
-          ctx.beginPath(); ctx.moveTo(X,Y); ctx.lineTo(p3x,p3y); ctx.stroke(); };
+          ctx.beginPath(); let on=false;
+          for(let i=0;i<NS;i++){ p3(AX[i],AY[i],ZZ[i]); if(p3s<=0){on=false;continue;}
+            on?ctx.lineTo(p3x,p3y):ctx.moveTo(p3x,p3y); on=true; }
+          ctx.stroke(); };
         ctx.strokeStyle='rgba(214,226,255,0.34)'; ctx.lineWidth=Math.max(0.8,1.6*_cs);
-        sl(c1x,c1y,c2x,c2y,zF,zR,-rx,-ry);
-        sl(c3x,c3y,c0x,c0y,zR,zF, rx, ry); } }
-    // roof sprite via a projected affine basis (centre + forward + right, all at roof height)
-    const img=isCop?CARIMG['ct6']:carSprite(cdef);
+        sl(sRX,sRY,sZK, rx, ry); sl(sLX,sLY,sZK,-rx,-ry);        // belt crease along the body's widest edge
+        ctx.strokeStyle=GLASSLIT; ctx.lineWidth=Math.max(0.7,1.2*_cs);
+        sl(sCRX,sCRY,sZT, rx, ry); sl(sCLX,sCLY,sZT,-rx,-ry); } } // roof rail / drip line above the glass
+    // SPOILER / DUCKTAIL. Sized per model: a lip on the sedans, a real raised blade on the hypercars. It sits above
+    // the decklid station, so it reads in silhouette against whatever is behind the car.
+    if(BD.wing>0.022){ const uw=SN[NS-2][0], zw=zAtU(uw);
+      p3Box(PX(uw,0),PY(uw,0),L*0.050,Wd*wAtU(uw)*0.99,ang,zw-CZ*0.02,zw+CZ*BD.wing,_bc(-fx,-fy,0.72),_bc(0,0,0.95),false); }
+    // ── THE SPRITE, DRAPED OVER THE PROFILE ───────────────────────────────────────────────────────────────────
+    // The top-down art used to be pasted onto ONE flat plane at roof height, which is why every car was a picture
+    // lying on a slab. It is now cut into bands along its length and each band is mapped onto the profile plane at
+    // its own station — hood art sits at hood height, roof art at roof height. Each band's forward axis is probed
+    // along the LOCAL SLOPE, so consecutive bands share an edge and the artwork bends over the car instead of
+    // stair-stepping down it. Band count follows distance: the strips are invisible past a few car lengths and
+    // 7 clipped drawImage calls per car is not something to spend on a dot near the horizon.
+    const img=_img0;
     if(spriteReady(img)){
-      // The roof sprite is mapped through a projected AFFINE BASIS: project the roof centre, then a point one probe
-      // length forward and one to the right. Those two screen deltas are the sprite's x/y axes, so the art lies on
-      // the car's actual roof plane — foreshortened by the same perspective as the road under it.
-      // Probing the FORWARD axis at the pitched nose height (zF) rather than flat tilts the whole mapped plane, so
-      // the artwork leans back with the body on power instead of staying pasted flat while the box moves under it.
-      const f0=p3(wx,wy,CARZ); if(p3s<=0)return; const Cx=p3x,Cy=p3y;
-      p3(wx+ca*L,wy+sa*L,zF); if(p3s<=0)return; const Fx=(p3x-Cx)/L, Fy=(p3y-Cy)/L;   // screen delta per world unit forward
-      p3(wx-sa*L,wy+ca*L,CARZ); if(p3s<=0)return; const Rx=(p3x-Cx)/L, Ry=(p3y-Cy)/L;   // ... per world unit right
-      // sprite art is nose-UP, so sprite +x is world-right and sprite +y is world-BACKWARD
-      const w=1024*cdef.s*CARSCALE;
+      const HALFW=SPW/2;
+      const bands=(!lite&&_cd<900)?NS-1:(_cd<1900?3:1);
       ctx.save();
-      ctx.setTransform(DPR*Rx,DPR*Ry,-DPR*Fx,-DPR*Fy,DPR*Cx,DPR*Cy);
-      ctx.drawImage(img,-w/2,-w/2,w,w);
+      for(let b=0;b<bands;b++){
+        const uA=(bands===NS-1)?SN[b][0]:1-2*b/bands, uB=(bands===NS-1)?SN[b+1][0]:1-2*(b+1)/bands;
+        const zA=zAtU(uA), zB=zAtU(uB), du=uA-uB;
+        // Probe THIS BAND's own end points rather than a fixed ±L baseline off the car centre. Perspective is not
+        // affine, so a long baseline leaves each band's approximation wrong by a different amount and the artwork
+        // visibly shears at every seam. Sharing the exact end points makes consecutive bands agree on their border.
+        p3(PX(uA,0),PY(uA,0),zA); if(p3s<=0)continue; const Ax=p3x,Ay=p3y;
+        p3(PX(uB,0),PY(uB,0),zB); if(p3s<=0)continue; const Bx=p3x,By=p3y;
+        const Fx=(Ax-Bx)/(du*L), Fy=(Ay-By)/(du*L);                       // screen delta per world unit forward
+        const Cx=Ax-uA*(Ax-Bx)/du, Cy=Ay-uA*(Ay-By)/du;                   // where this band's line crosses u=0
+        // Lateral axis, sampled at the band's midpoint — and SQUEEZED by the same cabin tuck the geometry uses, so
+        // over the greenhouse the plan-view art narrows onto the glasshouse instead of hanging its fenders out at
+        // roof height. Below the belt the multiplier is 1 and nothing changes.
+        const uM=(uA+uB)*0.5, zM=(zA+zB)*0.5, wm=wMul(_lerp(uM,2));
+        p3(PX(uM,0),PY(uM,0),zM); if(p3s<=0)continue; const Mx=p3x,My=p3y;
+        p3(PX(uM,wm),PY(uM,wm),zM); if(p3s<=0)continue; const Rx=(p3x-Mx)/Wd, Ry=(p3y-My)/Wd;
+        // sprite art is nose-UP, so sprite +x is world-right and sprite +y is world-BACKWARD → spriteY = -u*L
+        const y0=(b===0)?-HALFW:-uA*L, y1=(b===bands-1)?HALFW:-uB*L;
+        ctx.save();
+        ctx.setTransform(DPR*Rx,DPR*Ry,-DPR*Fx,-DPR*Fy,DPR*Cx,DPR*Cy);
+        ctx.beginPath(); ctx.rect(-HALFW,y0,SPW,y1-y0); ctx.clip();
+        ctx.drawImage(img,-HALFW,-HALFW,SPW,SPW);
+        ctx.restore();
+      }
       ctx.setTransform(DPR,0,0,DPR,0,0);
       ctx.restore();
     }
@@ -2467,57 +2856,93 @@
     // a wall of red rather than anonymous shapes.
     { const mx=(c2x+c3x)*0.5, my=(c2y+c3y)*0.5;
       if((mx-P3.cx)*(mx-wx)+(my-P3.cy)*(my-wy)<0){   // only when the tail actually faces the lens
-        // quad on the rear face, in (across, up) fractions
-        const rf=(u0,u1,t0,t1)=>{ const ax=c2x+(c3x-c2x)*u0, ay=c2y+(c3y-c2y)*u0, bx=c2x+(c3x-c2x)*u1, by=c2y+(c3y-c2y)*u1;
-          p3Set(0,ax,ay,zR*t0); p3Set(1,bx,by,zR*t0); p3Set(2,bx,by,zR*t1); p3Set(3,ax,ay,zR*t1); p3Poly(4); };
+        // The rear face is now a RAKED, TAPERED surface rather than a vertical rectangle: its top edge sits forward
+        // of its bottom edge and is wider, matching the shell's shoulder. That lean is the difference between a
+        // fastback and a packing crate, and it costs nothing — every (across u, up t) fraction below is unchanged,
+        // they just land on a leaning surface now. Scratch vars, not returned arrays: this runs ~25× per car per frame.
+        let _rfx=0,_rfy=0,_rfz=0;
+        const zTail=sZT[NS-1], wTail=SN[NS-1][1];   // the face has to land exactly on the shell's own tail station
+        const rpt=(u,t)=>{ const v=(u*2-1)*wTail*(0.86+0.14*Math.min(1,t*1.7)), uu=-1.00+0.03*t;
+          _rfx=PX(uu,v); _rfy=PY(uu,v); _rfz=zTail*t; };
+        const rfS=(i,u,t)=>{ rpt(u,t); p3Set(i,_rfx,_rfy,_rfz); };
+        const rf=(u0,u1,t0,t1)=>{ rfS(0,u0,t0); rfS(1,u1,t0); rfS(2,u1,t1); rfS(3,u0,t1); p3Poly(4); };
         const braking=isPlayer?K.brake:!!brk;
-        // Point projector on the rear face, same (across u, up t) fractions the quad helper uses. Needed for the
-        // screen-space lamp glow below, which cannot be expressed as a face quad.
-        const rp=(u,t)=>{ const ax=c2x+(c3x-c2x)*u, ay=c2y+(c3y-c2y)*u; return p3(ax,ay,zR*t); };
+        // Point projector on the rear face, same fractions the quad helper uses. Needed for the screen-space lamp
+        // glow below, which cannot be expressed as a face quad.
+        const rp=(u,t)=>{ rpt(u,t); return p3(_rfx,_rfy,_rfz); };
         // Rear panel stays DARK. Lifting it toward graphite made the tail slab read as a separate crate bolted to
         // the car, and a body-colour accent band on top of that flooded the whole face — between them the back of
         // the car became one red box. The panel's job is to disappear into the bodywork.
         ctx.fillStyle=isCop?'#101018':'#15121e'; ctx.beginPath(); rf(0,1,0,1); ctx.fill();
         ctx.fillStyle='#2a2632'; ctx.beginPath(); rf(0.02,0.98,0,0.20); ctx.fill();                    // bumper
-        // CAMARO CLUSTERS. Real Camaro lamps are SLIM horizontal blocks sitting high, quartered by a dark cross,
-        // with a wide dark gap between them — they are a small bright accent on a mostly dark tail, not a band
-        // across it. Previously these covered 48% of the face height and 84% of its width, which is why the whole
-        // rear went red. Held to a 20%-tall strip inside each half, with bodywork visible above, below and between.
-        const CL=[[0.115,0.405],[0.595,0.885]], T0=0.50, T1=0.70, TM=(T0+T1)*0.5, GAP=0.006;
-        ctx.fillStyle=isCop?'#08080f':'#0b0912'; ctx.beginPath();                                      // recessed housing, just proud of the lens
-        for(const c of CL) rf(c[0]-0.022,c[1]+0.022,T0-0.035,T1+0.035);
+        // VALANCE, DIFFUSER FINS, EXHAUST. The bottom fifth of the old tail was one flat grey band, which is the
+        // part of a car a chase camera stares straight at. Fins give it depth for four quads, and the pipes are the
+        // detail that says "this thing has an engine" — they read even at distance because they are the only warm
+        // metal on an otherwise dark valance.
+        ctx.fillStyle='#0c0b12'; ctx.beginPath(); rf(0.20,0.80,0.015,0.145); ctx.fill();               // recessed diffuser
+        ctx.fillStyle='#211e2a'; ctx.beginPath();
+        for(let f=0;f<4;f++){ const fu=0.24+f*0.148; rf(fu,fu+0.030,0.02,0.14); }                      // vertical strakes
+        ctx.fill();
+        ctx.fillStyle=night?'#4a4a56':'#6e6e7c'; ctx.beginPath();                                       // twin tips, chrome
+        rf(0.255,0.345,0.055,0.125); rf(0.655,0.745,0.055,0.125); ctx.fill();
+        ctx.fillStyle='#08080c'; ctx.beginPath();                                                       // the bore inside each tip
+        rf(0.272,0.328,0.068,0.112); rf(0.672,0.728,0.068,0.112); ctx.fill();
+        // REAR-LIGHT SIGNATURE, PER MODEL (LAMPS3). Every car used to wear the same Camaro cluster. This is the one
+        // feature that is unmistakable from directly behind — a Charger's full-width bar, a Corvette's four rounds,
+        // a CT6's vertical stacks — and directly behind is the only place this camera ever sits. Whatever the shape,
+        // it stays a SMALL BRIGHT ACCENT on a mostly dark tail: lamps big enough to fill the face are exactly what
+        // turned the whole back of the car into one red box the first time round.
+        const LS=LAMPS3[BD.lamp]||LAMPS3.quad, CL=LS.cells;
+        let TT=0; for(const c of CL) if(c[3]>TT)TT=c[3];
+        ctx.fillStyle=isCop?'#08080f':'#0b0912'; ctx.beginPath();                                      // recessed housings, just proud of the lenses
+        for(const c of CL) rf(c[0]-0.020,c[1]+0.020,c[2]-0.030,c[3]+0.030);
         ctx.fill();
         const lampCol=isCop?'#2f6bff':(braking?'#ff3524':'#b81c14'), hotCol=isCop?'#9fc0ff':(braking?'#ffcaa8':'#e04a34');
+        const GAP=0.006;
         ctx.globalAlpha=braking?1:0.78; ctx.fillStyle=lampCol; ctx.beginPath();
-        for(const c of CL){ const cm=(c[0]+c[1])*0.5;                                                  // quartered by a dark cross — the Camaro read
-          rf(c[0],cm-GAP,T0,TM-GAP); rf(cm+GAP,c[1],T0,TM-GAP);
-          rf(c[0],cm-GAP,TM+GAP,T1); rf(cm+GAP,c[1],TM+GAP,T1); }
+        for(const c of CL){ const cm=(c[0]+c[1])*0.5, tm=(c[2]+c[3])*0.5;
+          if(LS.cut==='cross'){ rf(c[0],cm-GAP,c[2],tm-GAP); rf(cm+GAP,c[1],c[2],tm-GAP);              // quartered — the Camaro read
+                                rf(c[0],cm-GAP,tm+GAP,c[3]); rf(cm+GAP,c[1],tm+GAP,c[3]); }
+          else if(LS.cut==='ribs'){ const n=Math.max(2,Math.round((c[1]-c[0])/0.075)), sw=(c[1]-c[0])/n;
+            for(let k=0;k<n;k++) rf(c[0]+k*sw+GAP,c[0]+(k+1)*sw-GAP,c[2],c[3]); }                      // segmented bar
+          else rf(c[0],c[1],c[2],c[3]); }
         ctx.fill();
         ctx.globalAlpha=braking?0.95:0.50; ctx.fillStyle=hotCol; ctx.beginPath();                      // filament hot line through each lens
-        for(const c of CL) rf(c[0]+0.012,c[1]-0.012,TM-0.028,TM+0.028);
+        for(const c of CL){ const tm=(c[2]+c[3])*0.5, th=Math.min(0.028,(c[3]-c[2])*0.24);
+          rf(c[0]+0.010,c[1]-0.010,tm-th,tm+th); }
         ctx.fill();
         ctx.globalAlpha=1;
         ctx.fillStyle=isCop?'#3a4055':'#312b38'; ctx.beginPath();                                      // chrome trim under each cluster
-        for(const c of CL) rf(c[0]-0.022,c[1]+0.022,T0-0.052,T0-0.035);
+        for(const c of CL) rf(c[0]-0.020,c[1]+0.020,c[2]-0.046,c[2]-0.030);
         ctx.fill();
-        if(braking){ ctx.fillStyle=lampCol; ctx.beginPath(); rf(0.455,0.545,T1+0.05,T1+0.11); ctx.fill(); }  // high-level third brake lamp
-        ctx.fillStyle=night?'#f4ecd8':'#8a8494'; ctx.beginPath(); rf(0.44,0.56,0.06,0.18); ctx.fill(); // plate, down on the bumper
+        if(braking){ ctx.fillStyle=lampCol; ctx.beginPath(); rf(0.455,0.545,Math.min(0.86,TT+0.05),Math.min(0.92,TT+0.11)); ctx.fill(); }  // high-level third brake lamp
+        // Plate lifted from t0.06 onto the bumper face at t0.24 — at its old height it sat inside the new diffuser
+        // recess, which read as a licence plate mounted underneath the car.
+        ctx.fillStyle=night?'#f4ecd8':'#8a8494'; ctx.beginPath(); rf(0.44,0.56,0.24,0.35); ctx.fill();
+        // DECKLID LIP. A slim band of the car's own paint along the very top edge, standing where the boot lid turns
+        // over into the tail. It separates the dark tail panel from the roof, and it is the one place body colour
+        // belongs back here — a wide accent band is what turned this whole face into a red box last time, so it is
+        // held to 5% of the height.
+        ctx.fillStyle=_bc(-fx,-fy,0.92); ctx.beginPath(); rf(0.02,0.98,0.95,1.0); ctx.fill();
         // GLOW. Sized to the CLUSTER, not the face — a radius scaled off full body width threw a red wash across
         // the whole tail and was a big part of the box read.
         ctx.save(); ctx.globalCompositeOperation='lighter';
-        const _lf=rp(0.5,TM);
+        const _lf=rp(0.5,(CL[0][2]+CL[0][3])*0.5);
         if(!lite&&p3s>0&&_lf<1500&&PERF.lvl<3){
-          rp(CL[0][0],TM); const _ex=p3x,_ey=p3y; rp(CL[0][1],TM); const _cw=Math.hypot(p3x-_ex,p3y-_ey);
-          const _rad=Math.max(2,_cw*0.78), _gi=braking?0.80:(night?0.42:0.22);
-          for(const c of CL){ rp((c[0]+c[1])*0.5,TM); if(p3s<=0)continue;
+          // Radius follows the FIRST cell's own on-screen width, so a Corvette's small round lamp glows small and a
+          // Charger's bar glows wide. Scaling it off the body width instead threw a red wash over the whole tail.
+          const _t0=(CL[0][2]+CL[0][3])*0.5;
+          rp(CL[0][0],_t0); const _ex=p3x,_ey=p3y; rp(CL[0][1],_t0); const _cw=Math.hypot(p3x-_ex,p3y-_ey);
+          const _rad=Math.max(2,Math.min(_cw*0.78,Wd*0.9*p3s)), _gi=braking?0.80:(night?0.42:0.22);
+          for(const c of CL){ rp((c[0]+c[1])*0.5,(c[2]+c[3])*0.5); if(p3s<=0)continue;
             const g=ctx.createRadialGradient(p3x,p3y,0,p3x,p3y,_rad);
             g.addColorStop(0,isCop?'rgba(120,170,255,'+_gi+')':'rgba(255,90,60,'+_gi+')');
             g.addColorStop(0.45,isCop?'rgba(60,110,255,'+(_gi*0.30).toFixed(3)+')':'rgba(210,36,22,'+(_gi*0.32).toFixed(3)+')');
             g.addColorStop(1,'rgba(0,0,0,0)');
             ctx.fillStyle=g; ctx.beginPath(); ctx.arc(p3x,p3y,_rad,0,7); ctx.fill(); } }
         else { ctx.globalAlpha=braking?0.65:(night?0.34:0.20); ctx.fillStyle=isCop?'#4f8bff':'#ff4030';
-          ctx.beginPath(); for(const c of CL) rf(c[0]-0.03,c[1]+0.03,T0-0.05,T1+0.05); ctx.fill(); }   // far-car fallback, same slim footprint
-        if(braking){ p3(wx-ca*L*1.05,wy-sa*L*1.05,zR*0.55);   // pool of red thrown back onto the tarmac
+          ctx.beginPath(); for(const c of CL) rf(c[0]-0.03,c[1]+0.03,c[2]-0.05,c[3]+0.05); ctx.fill(); }   // far-car fallback, same slim footprint
+        if(braking){ p3(wx-ca*L*1.05,wy-sa*L*1.05,zTail*0.55);   // pool of red thrown back onto the tarmac
           if(p3s>0){ ctx.globalAlpha=0.34; ctx.fillStyle='#ff2a2a'; ctx.beginPath(); ctx.ellipse(p3x,p3y,Math.max(2,Wd*1.05*p3s),Math.max(1,6*p3s),0,0,7); ctx.fill(); } }
         ctx.restore(); ctx.globalAlpha=1; } }
   }
