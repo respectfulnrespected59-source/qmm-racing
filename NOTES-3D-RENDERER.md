@@ -63,15 +63,43 @@ panel / bumper / tail lights.
 ## The camera rig
 
 ```js
-const CAM_H = 400, CAM_BACK = 545, CAM_CARY = 0.80;
+const CAM_H = 154, CAM_BACK = 400, CAM_CARY = 0.72;   // ratio 0.385 = 21.1°
 ```
 
 - `CAM_H` — height above the tarmac. **`CAM_H / CAM_BACK` is the angle** and is the
-  number that actually matters. 0.73 currently: high and near-overhead, keeping the
-  elevated feel of the original top-down while perspective runs the road to a horizon.
-- `CAM_BACK` — how far behind the car.
+  number that actually matters. **0.385 (21.1°)** since 2026-08-12: a low kart-racer
+  chase seat, behind the car rather than above it. It was 0.73, which looked down onto
+  the roof and hid the entire rear of the car — the part this camera lives on.
+- `CAM_BACK` — how far behind the car, i.e. how big the car sits on screen.
 - `CAM_CARY` — where the car sits vertically in frame. **The horizon is derived from
   this**, so the car stays planted at any window size.
+
+### ⚠️ THE RATIO IS WELDED TO THE CAR STRIPS — the most expensive fact in this file
+
+Every turntable in `assets/cars3d/` is baked at a fixed elevation of `atan(CAM_H/CAM_BACK)`.
+Change either number **without re-baking** and the cars are drawn at one angle inside a world
+projected at another. They disagree about where the camera is, and it reads as *the car
+floating above the road*, which is exactly how it got reported. Re-bake at the matching tilt:
+
+```
+bake.html?frames=48&cell=448&cover=1.27&tilt=<atan(ratio) in degrees>&list=<id>|hi/<id>/scene.gltf|<colour>
+```
+
+Two consequences of the bake's **14° long lens** (near-orthographic, distance-independent):
+
+- **Scaling `CAM_H` and `CAM_BACK` TOGETHER is free.** The ratio is unchanged, so the tilt is
+  unchanged, so existing strips stay valid. That is how the car got ~35% bigger on screen
+  (210/545 → 154/400) with no re-bake.
+- **`CAM_CARY` is never welded to the bake** and tunes freely. At 0.80 the car hung off the
+  bottom edge once the angle went shallow; 0.72 puts it back in frame.
+
+`cover=1.27` is the production framing value, **not** the tool's 2.6 default — it is normalised
+by each model's measured `carLen`, so one value serves the whole roster (verified: all ten cars
+land within 0.6% of the shipped side-view width).
+
+⚠️ Bake from **`hi/<id>/scene.gltf`**, not `models/<id>.glb`. The `models/` GLBs are the older
+poly.pizza roster — `models/camaro.glb` is a **Mazda RX-7**. `MODEL_SOURCES.tsv` describes those;
+`assets/cars3d/CREDITS.txt` describes what actually ships.
 
 Do NOT expose the horizon as a direct dial — it fights the height dial (raise the
 camera and the car falls off the bottom of the screen). That was tried and replaced.

@@ -106,8 +106,28 @@ zero builds. Both files are named `qmm-racing-itch.zip` — tell them apart by s
 
 ## OPEN: the chase renderer
 
-Still WIP, now opt-in. See `NOTES-3D-RENDERER.md` from line 260 for the baked-turntable
-pipeline and `tools/bake3d/`.
+Still opt-in (`camMode` default is BIRDS-EYE). See `NOTES-3D-RENDERER.md` from line 260 for the
+baked-turntable pipeline and `tools/bake3d/`.
+
+### 2026-08-12 — camera re-angled to 21.1° and the WHOLE ROSTER re-baked to match
+
+Uncommitted in the working tree at time of writing. Owner wanted the kart-racer chase feel.
+
+- `CAM_H/CAM_BACK/CAM_CARY` **400/545/0.80 → 154/400/0.72**. Ratio 0.73 → **0.385 (21.1°)**.
+- **All ten strips in `assets/cars3d/` re-baked at `tilt=21.1, cover=1.27, cell=448`.** Never ship
+  a build where the camera ratio and the strips disagree — see the welded-ratio warning in NOTES.
+  Bonus: strips went 4.5 MB → 3.7 MB, which helps the mobile ceiling.
+- Wheel tread/wall lifted off near-black. They were invisible against dark asphalt, so the car
+  read as a box with no wheels. **The rim was deliberately NOT lifted as far** — at `#9aa2b5` it
+  blew out into a bright disc that swallowed the tyre.
+
+**Rejected for the ZL1 specifically, so nobody retries it there:** replacing its mesh with a
+generated one. A Tripo Pro image→3D run (55 cr) produced a retro fastback with a *mirrored rear
+where the front should be* — single-image 3D cannot invent a front it was never shown. And every
+attempt to prompt a "Camaro-shaped muscle coupe" converged on a recognisable **Dodge Challenger**,
+i.e. a real manufacturer's trade dress. The shipped Sketchfab `Camaro ZL1 1LE` is **CC-BY-4.0 with
+commercial use allowed** and already credited — it stays. An original QMM vehicle should be a NEW
+car in the roster, designed to look deliberately futuristic, not a replacement for the ZL1.
 
 ---
 

@@ -695,7 +695,18 @@
   //   CAM_BACK — how far behind the car the lens sits.
   //   CAM_CARY — where the car sits vertically in frame. The horizon is DERIVED from this (see p3Update), so the
   //              car stays planted at this spot regardless of window size or the other two values.
-  const CAM_H=400, CAM_BACK=545, CAM_CARY=0.80;   // ratio 0.73 — back up high so you look down onto the roof rather than at the body's side walls; the rear face is still angled toward you enough to read its lights
+  // ★ ratio 0.385 (atan = 21.1°) — a low kart-racer chase seat, BEHIND the car rather than above it. The old 0.73
+  // looked down onto the roof, which read closer to top-down than to a chase cam and hid the whole rear of the car.
+  // ⚠️ THIS RATIO IS WELDED TO THE CAR STRIPS. Every turntable in assets/cars3d/ is baked at a fixed elevation of
+  // atan(CAM_H/CAM_BACK), so changing either number WITHOUT re-baking leaves the cars drawn at one angle inside a
+  // world projected at another — they disagree about where the camera is, and it reads as the car floating. Re-bake
+  // with tools/bake3d/bake.html at the MATCHING tilt (see NOTES-3D-RENDERER.md), then update here.
+  // CAM_CARY is NOT welded to the bake and tunes freely; at 0.80 the car hung off the bottom edge at this shallower
+  // angle, so it moved up the frame to 0.72.
+  // CAM_H and CAM_BACK move TOGETHER (210/545 -> 154/400) to pull the lens in WITHOUT touching the ratio:
+  // the car gets ~35% bigger on screen while the tilt stays 21.1°, so the baked strips stay valid. At 545
+  // the car was ~10% of screen width, and no amount of detail can read at that size.
+  const CAM_H=154, CAM_BACK=400, CAM_CARY=0.72;   // ratio 0.385 = 21.1° · strips in assets/cars3d/ baked to match
   let CAMX=0, CAMY=0;   // world point at the centre of the screen — top-down parallax + culling key off THIS, not the car
   try{ const _cm=localStorage.getItem('qmCam3'); if(_cm!=null){ const v=parseInt(_cm,10); if(v>=0&&v<=2)camMode=v; } }catch(e){}   // a returning player's saved choice still wins over the default above
   function cycleCam(){ camMode=(camMode+1)%3; try{localStorage.setItem('qmCam3',camMode);}catch(e){} const nm=CAMNAMES[camMode]; raceMsg='📷 CAM: '+nm; raceMsgT=1.3; const cb=document.getElementById('camBtn'); if(cb)cb.title='Camera: '+nm+' (C)'; }   // shared by the C key + the 🎥 button
@@ -2664,8 +2675,12 @@
           const steer=Math.max(-0.5,Math.min(0.5,(isPlayer?(car.wheelSteer||0):(st||0))*0.85));
           const odo=isPlayer?(car._odo||0):(odo0||0);
           const det=!lite&&_wcd<1100;
-          const tread=night?'#08080d':'#0d0d14', wall=night?'#121219':'#191921';
-          const rim=isCop?'#8f95a4':(night?'#3e424e':'#5c6170');
+          // Tyre and rim were near-black on near-black asphalt, so from the chase seat the car read as a
+          // box with no wheels at all. Lifting tread/wall is what makes the contact patch register; the RIM
+          // stays comparatively dark on purpose - taken up to #9aa2b5 it blew out into a bright disc that
+          // swallowed the tyre and looked like a dinner plate stuck to the bodywork.
+          const tread=night?'#15151d':'#1c1c25', wall=night?'#22222b':'#2b2b36';
+          const rim=isCop?'#8f95a4':(night?'#4a4f5d':'#6b7183');
           for(const w of WM){
             const rW=w.r*L, spin=odo/Math.max(1e-3,rW);         // rolling without slipping: θ = distance / radius
             const wa=ang+(w.u>0?steer:0);                        // only the front pair steers
