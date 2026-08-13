@@ -686,7 +686,7 @@
   //         2=CLOSE (mid top-down). The two top-down modes share the old flat renderer; CHASE uses draw3D().
   // camAng = the heading the chase camera trails, eased toward the direction of TRAVEL (not the body angle) so a drift
   // reads as the car stepping sideways across the screen instead of the whole city snapping round with the nose.
-  let camMode=1, camAng=0;   // BIRDS-EYE is the shipping default — CHASE (0) is still WIP, so it's opt-in via C / 🎥 rather than what a first-time player lands in
+  let camMode=1, camAng=0;   // BIRDS-EYE. ⚠️ CHASE (0) is WITHDRAWN and UNREACHABLE — see the block above cycleCam(); `camMode===0` in draw() is dead code kept on purpose
   const CAMNAMES=['CHASE','BIRDS-EYE','CLOSE'];
   // ── CHASE CAMERA RIG (dialled in by eye at speed, then baked) ──
   //   CAM_H    — lens height above the tarmac. CAM_H/CAM_BACK is the ANGLE: 0.65 here, so it keeps the elevated,
@@ -708,8 +708,19 @@
   // the car was ~10% of screen width, and no amount of detail can read at that size.
   const CAM_H=154, CAM_BACK=400, CAM_CARY=0.72;   // ratio 0.385 = 21.1° · strips in assets/cars3d/ baked to match
   let CAMX=0, CAMY=0;   // world point at the centre of the screen — top-down parallax + culling key off THIS, not the car
-  try{ const _cm=localStorage.getItem('qmCam3'); if(_cm!=null){ const v=parseInt(_cm,10); if(v>=0&&v<=2)camMode=v; } }catch(e){}   // a returning player's saved choice still wins over the default above
-  function cycleCam(){ camMode=(camMode+1)%3; try{localStorage.setItem('qmCam3',camMode);}catch(e){} const nm=CAMNAMES[camMode]; raceMsg='📷 CAM: '+nm; raceMsgT=1.3; const cb=document.getElementById('camBtn'); if(cb)cb.title='Camera: '+nm+' (C)'; }   // shared by the C key + the 🎥 button
+  // ★★ CHASE (mode 0) IS WITHDRAWN FROM PLAY — 2026-08-12, owner's call. The renderer, the strips and the
+  // whole bake pipeline are LEFT INTACT; only the route in is removed, so this is one line to undo.
+  // WHY: chase draws 48-frame turntable bakes of low-poly meshes under a soft PBR studio light, while the
+  // top-down views draw HAND-ILLUSTRATED sprites with bold outlines and flat neon shading. That is not a
+  // detail gap polish can close — the two modes are in different ART DIRECTIONS, and a soft photoreal car
+  // dropped into a flat neon world reads as cheap beside the overhead.
+  // IF REVISITED, try FIRST: cel/toon shading + a neon rim light + an outline pass in tools/bake3d/bake.html,
+  // so the 3D cars look ILLUSTRATED rather than photographed. That addresses WHY it looks wrong; every
+  // angle/size/colour tweak only addressed HOW MUCH DETAIL it has, and none of them were enough.
+  // A stored qmCam3 of 0 from an earlier session is deliberately ignored, so nobody is stranded in a mode
+  // they can no longer cycle out of.
+  try{ const _cm=localStorage.getItem('qmCam3'); if(_cm!=null){ const v=parseInt(_cm,10); if(v>=1&&v<=2)camMode=v; } }catch(e){}   // a returning player's saved choice still wins over the default above
+  function cycleCam(){ camMode = camMode===1 ? 2 : 1; try{localStorage.setItem('qmCam3',camMode);}catch(e){} const nm=CAMNAMES[camMode]; raceMsg='📷 CAM: '+nm; raceMsgT=1.3; const cb=document.getElementById('camBtn'); if(cb)cb.title='Camera: '+nm+' (C)'; }   // BIRDS-EYE <-> CLOSE only; CHASE is withdrawn (see above)
   function ring(x,y,col,sp){ if(rings.length>=22)rings.shift(); rings.push({x,y,r:20,a:0.85,col,sp:sp||520}); }   // BOUNDED (22 max) — cheap stroked-arc shockwave
   const rain=[]; let rainLast=0;   // screen-space rain streaks (wet mode)
   const MAXSPD=560,BOOST_MAX=800,HEAT_MAX=100,CARSCALE=1.2;   // dampened top speed for more control (~18% cut from 680/980 for slower-reflex friendliness); CARSCALE bumps sprite size to show UHD detail
