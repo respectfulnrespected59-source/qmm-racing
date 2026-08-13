@@ -516,7 +516,7 @@
     // CIRCUIT — a proper GP-style loop: long straights, hairpins, fast sweepers
     medium:{name:'CIRCUIT', roadW:560, laps:5, rSpd:680, rStep:28, rN:4, spd:1.02, rCatch:215, rDrop:115, soften:1.7, wsc:0.942, wpts:[[-4000,2200],[0,2400],[3800,2100],[4400,800],[3600,-400],[1800,-300],[900,-1200],[-600,-1400],[-1800,-600],[-3400,-1500],[-4600,-400],[-4200,900]]},   // REAL GP CIRCUIT — waypoint+spline: main straight + technical infield, softened corners (safe 1.89x)
     // SPEEDWAY — fast flowing circuit (WIDENED: world scaled up so roadW560 stays safe 1.43x)
-    spa:   {name:'SPEEDWAY', roadW:580, laps:6, rSpd:885, rStep:32, rN:5, spd:1.08, rCatch:258, rDrop:96, soften:1.45, wsc:0.637, wpts:[[-5200,1700],[2000,2300],[4900,1500],[5000,200],[2500,-500],[-1200,-700],[-4400,-1500],[-5400,-200]]},   // TEMPLE OF SPEED — long straights + sweeping end hairpins, minimal middle (safe 1.60x)
+    spa:   {name:'SPEEDWAY', roadW:580, laps:6, rSpd:810, rStep:32, rN:5, spd:1.08, rCatch:258, rDrop:96, soften:1.45, wsc:0.637, wpts:[[-5200,1700],[2000,2300],[4900,1500],[5000,200],[2500,-500],[-1200,-700],[-4400,-1500],[-5400,-200]]},   // TEMPLE OF SPEED — long straights + sweeping end hairpins, minimal middle (safe 1.60x)
     // ===== CUSTOM WIDE CIRCUITS — flowing complex shapes, NO self-folds/overlap (validated), arcade-wide + AI-friendly. NO JUMPS. =====
     serpent:{name:'GRAND PRIX', roadW:560, laps:3, rSpd:830, rStep:30, rN:5, spd:1.06, rCatch:245, rDrop:102, soften:1.6, wsc:3.887, wpts:[[-5000,1400],[-2000,2000],[1500,2100],[4200,1400],[4800,-200],[3400,-1200],[1200,-1000],[-400,-1700],[-2400,-1300],[-4400,-1600],[-5200,-200],[-4400,900]]},   // FLOWING GP CIRCUIT — long straight, fast sweepers, a technical kink; NO jumps (safe 1.91x)
     spaghetti:{name:'SPAGHETTI BOWL', roadW:560, laps:2, rSpd:820, rStep:30, rN:5, spd:1.05, rCatch:245, rDrop:100, gen:t=>{const r=7600+1900*Math.cos(6*t);return{x:r*Math.cos(t),y:-r*Math.sin(t)};}},   // 6-HAIRPIN FLOWER — COUNTER-CLOCKWISE (left turns), WIDENED to 560 (safe 2.07x)
@@ -715,7 +715,7 @@
     rivals=[]; const D=DIFFS[curDiff], grid=[[60,72],[224,-72],[224,72],[388,-72],[388,72]]; finishSeq=0; car.place=null;   // player = front-left; rivals fill the rest. Row spacing widened 96→164 so cars don't spawn overlapping (was glitching the physics at the green light)
     const pF1=!!CARS[playerCar].f1; const pool=CARS.map((_,i)=>i).filter(i=>i!==playerCar && !!CARS[i].f1===pF1);   // rivals match the player's CLASS — pick an F1 car → the whole grid is F1 (that's the mode); a street car → street rivals
     const champMul=champMode?(1.10+champIdx*0.018):1;   // CHAMPIONSHIP difficulty ramp — STEEPER (R1 ~+10% → R11 ~+28%) so the ladder rivals are genuinely tough, not a walkover
-    const RIVAL_SKILL=1.13;   // global "better drivers" uplift — CRANKED (Rob: rivals must compete HARD) — the whole grid is quicker & more competitive everywhere (stacks with champMul)
+    const RIVAL_SKILL=1.07;   // global "better drivers" uplift (stacks with champMul). CUT 1.13→1.07 when the rivals gained real racecraft — corner-exit surge, strategic nitro, two-corner lookahead and line defence. The player did NOT gain any of that, so trading raw speed for their new brains keeps total difficulty about where it was while making the challenge skill-shaped instead of stat-shaped. Measured: with racecraft the reference driver converts up to a 1.91 pace ratio (was ~1.73), so the ladder is tuned to sit under that.
     for(let k=0;k<D.rN;k++){ const g=place(grid[k][0],grid[k][1]); const ci=pool[k%pool.length]; rivals.push({x:g.x,y:g.y,a:fwd,idx:2,_ti:2,lap:0,speed:(D.rSpd+k*D.rStep)*champMul*RIVAL_SKILL*TI().riv,carIdx:ci,name:CARS[ci].driver,col:{b:'#1a1a22',s:CARS[ci].color},finished:false,place:null,bumpCd:0,aggr:(1.08+Math.random()*0.7+(champMode?0.3:0))*TI().agg}); }   // aggr = how hard this driver fights for position (bumped baseline + champ rivals fight harder still)
     phase='countdown'; cdT=3.0; goFlash=0; lastCd=99; raceMsg=''; raceMsgT=0;
   }
@@ -770,9 +770,23 @@
     const tp=ptAhead(idx, Math.min(laCap, trackLen*(0.045+Math.min(0.06,spd/MAXSPD*0.07)))); const err=norm(Math.atan2(tp.y-car.y,tp.x-car.x)-car.a);   // SMOOTH interpolated lookahead point (not a snapping node) → no more weaving/"drunk" steering
     const sd=i=>{ const ii=OPEN?Math.min(i,TN-2):((i%TN)+TN)%TN; const a=TRACK[ii],b=TRACK[(ii+1)%TN]; return Math.atan2(b.y-a.y,b.x-a.x); };
     const corner=Math.abs(norm(sd(idxAhead(idx,Math.min(laCap*1.5,trackLen*0.09)))-sd(idxAhead(idx,trackLen*0.018)))); const db=0.06; T.left=err<-db; T.right=err>db;   // bigger deadband = holds a stable line instead of twitching
-    if(spd>150){ if(!_botDrift && (corner>0.46||Math.abs(err)>0.55)) _botDrift=true; else if(_botDrift && corner<0.24 && Math.abs(err)<0.28) _botDrift=false; } else _botDrift=false;   // only drift on GENUINELY sharp corners → less speed-scrubbing, cleaner laps
+    // ★ TWO-CORNER LOOKAHEAD — same reasoning as the rivals: reading only the next bend means arriving at the
+    // second half of an S-bend or a chicane carrying far too much speed. Take the worse of two horizons.
+    const cornerFar=Math.abs(norm(sd(idxAhead(idx,Math.min(laCap*2.4,trackLen*0.15)))-sd(idxAhead(idx,Math.min(laCap*1.5,trackLen*0.09)))));
+    const cSevB=Math.max(corner,cornerFar*0.7);
+    // ★ CHASE THE DRIFT TIER. The drift-boost is tiered — the meter and the exit bonus both scale with how
+    // long the slide is held — so bailing out the instant a corner eases wastes the charge already built.
+    // Hold the slide a little longer once committed (0.24 → 0.18 release, and only when genuinely straight),
+    // which banks the higher tier instead of settling for tier 1 every corner.
+    if(spd>150){ if(!_botDrift && (cSevB>0.46||Math.abs(err)>0.55)) _botDrift=true; else if(_botDrift && cSevB<0.18 && Math.abs(err)<0.24) _botDrift=false; } else _botDrift=false;   // only drift on GENUINELY sharp corners → less speed-scrubbing, cleaner laps
     T.drift=_botDrift; const now=performance.now();
-    if(!T.drift && corner<0.14 && car.m>40 && car.boostT<=0 && now-_botBoostT>1500){ T.boost=true; _botBoostT=now; setTimeout(()=>{ T.boost=false; },110); } }
+    // ★ BANK THE METER. Firing at m>40 the moment the road straightens spends the boost on whatever corner
+    // happens to come first. Hold for a fuller meter and a genuinely open road, so the surge goes where it
+    // actually converts into track position — and always spend it on the final lap rather than finishing
+    // with a full bar, which is pure waste.
+    const botLast=(lap>=TOTAL_LAPS-1);
+    const wantBoost=(car.m>78) || (botLast && car.m>45) || (car.m>55 && cSevB<0.06);
+    if(!T.drift && cSevB<0.12 && wantBoost && car.boostT<=0 && now-_botBoostT>1200){ T.boost=true; _botBoostT=now; setTimeout(()=>{ T.boost=false; },110); } }
   function step(dt){
     if(DEMO){ const manual=keys['ArrowLeft']||keys['ArrowRight']||keys['KeyA']||keys['KeyD']||keys['Space']||keys['ShiftLeft']||keys['ShiftRight']||keys['ArrowDown']||keys['KeyS']||T.joy;
       if(manual)manualUntil=performance.now()+1500;                                   // touch the controls → you take the wheel
@@ -1031,7 +1045,14 @@
     // CORNER BRAKE — measure how hard the track turns just ahead; rivals scrub speed for tight corners (they used to carry full speed through everything → ran wide into the wall on MONZA/SUZUKA)
     const segDir=i=>{ const a=TRACK[i%TN],b=TRACK[(i+2)%TN]; return Math.atan2(b.y-a.y,b.x-a.x); };
     let cAhead=segDir(idxAhead(nr,Math.min(laD,ROAD_W*1.6)))-segDir(nr); while(cAhead>Math.PI)cAhead-=2*Math.PI; while(cAhead<-Math.PI)cAhead+=2*Math.PI;
-    const cornerBrake=1-Math.min(0.3,Math.abs(cAhead)*0.34);   // up to 30% slower into a SHARP bend only (lookahead fix already stops corner-cutting, so keep them fast & competitive) — measured over a shorter span so straights stay full-throttle
+    // ★ TWO-CORNER LOOKAHEAD (racecraft). Reading only the next corner means a rival brakes correctly for
+    // corner A and then arrives at corner B — the second half of an S-bend or a chicane — carrying far too
+    // much speed. Real drivers set entry speed for the WHOLE sequence. Sample a second horizon further out
+    // and brake for the worse of the two, discounting the far one since there is still road to shed speed in.
+    let cFar=segDir(idxAhead(nr,Math.min(laD*2.3,ROAD_W*3.4)))-segDir(idxAhead(nr,Math.min(laD,ROAD_W*1.6)));
+    while(cFar>Math.PI)cFar-=2*Math.PI; while(cFar<-Math.PI)cFar+=2*Math.PI;
+    const cSev=Math.max(Math.abs(cAhead),Math.abs(cFar)*0.72);   // the far corner counts, but less — there is still time to brake for it
+    const cornerBrake=1-Math.min(0.34,cSev*0.34);   // up to 34% slower into a sharp bend OR into a sequence; straights stay full-throttle
     const TI=i=>OPEN?Math.max(0,Math.min(TN-1,i)):((i%TN)+TN)%TN;
     const apexI=idxAhead(nr,laD); let tgx=TRACK[apexI].x, tgy=TRACK[apexI].y;
     { const mA=TRACK[idxAhead(nr,laD*0.4)], mC=TRACK[idxAhead(nr,laD*1.6)];   // concavity vector points to the INSIDE of the curve (≈0 on straights → robust, no sign guessing)
@@ -1042,18 +1063,32 @@
     // close by AND on similar race progress (not a lap up/down, not way ahead/behind). Then lean on them
     // to squeeze for the line — capped so they never abandon the racing line to spear someone. Real racecraft.
     { let bestD=150,tx=null,ty=null; const myProg=r.lap*TN+nr;
-      const consider=(ox,oy,oprog)=>{ if(Math.abs(oprog-myProg)>14)return; const od=Math.hypot(ox-r.x,oy-r.y); if(od<bestD){ bestD=od; tx=ox; ty=oy; } };
+      // ★ RACECRAFT BOOKKEEPING. Track the nearest car AHEAD (someone to hunt) and BEHIND (someone to hold
+      // off), over a much wider radius than the wheel-to-wheel lean uses. Strategic nitro and defending both
+      // need to answer "is spending something here actually worth it", and that needs a longer sightline
+      // than the 150u dogfight radius.
+      let chaseD=1e9, threatD=1e9; const _ca=Math.cos(r.a), _sa=Math.sin(r.a);
+      const consider=(ox,oy,oprog)=>{ const dx=ox-r.x, dy=oy-r.y, od=Math.hypot(dx,dy);
+        if(od<1500){ if(dx*_ca+dy*_sa>0){ if(od<chaseD)chaseD=od; } else if(od<threatD)threatD=od; }   // +dot = in front of this rival
+        if(Math.abs(oprog-myProg)>14)return; if(od<bestD){ bestD=od; tx=ox; ty=oy; } };
       consider(car.x,car.y,car.lap*TN+nearestTrack(car.x,car.y,car._ti).idx);
       for(const o of rivals){ if(o===r||o.finished)continue; consider(o.x,o.y,o.lap*TN+o.idx); }
+      r._chaseD=chaseD; r._threatD=threatD;
       if(tx!==null){ let ram=Math.atan2(ty-r.y,tx-r.x), dr=ram-desired; while(dr>Math.PI)dr-=2*Math.PI; while(dr<-Math.PI)dr+=2*Math.PI;
         dr=Math.max(-0.5,Math.min(0.5,dr)); desired+=dr*0.33*(r.aggr||1); }   // position lean — fight harder for the line (bumped for more competitive racecraft; separation below still stops dogpiling)
     }
     // PACK RACING — fan OUT so they race side-by-side instead of stacking into a blocking train; draft a car just ahead to set up a pass
     let sepx=0,sepy=0,drafting=false; const SEPR=Math.min(240,ROAD_W*0.42);   // fan-out radius scales with the (wide) road so they spread across it, not single-file
+    // ★ DEFEND THE LINE. Yield fully to a car IN FRONT (never rear-end the pack), but only ~40% to a car
+    // BEHIND. The old code moved aside equally in both directions, which meant a rival politely opened the
+    // door every single time someone drew alongside from behind. Now you have to actually make the pass.
+    // Kept as a reduction rather than zero so the anti-dogpile fan-out still works on tight hairpins.
     for(const o of rivals){ if(o===r||o.finished)continue; const ox=o.x-r.x,oy=o.y-r.y,od=Math.hypot(ox,oy)||1;
-      if(od<SEPR){ sepx-=ox/od*(SEPR-od); sepy-=oy/od*(SEPR-od); }                            // push apart when overlapping → spread across the road
-      const ahead=ox*Math.cos(r.a)+oy*Math.sin(r.a); if(ahead>0&&ahead<220&&od<240)drafting=true; }   // a car right in front = slipstream
-    { const ox=car.x-r.x,oy=car.y-r.y,od=Math.hypot(ox,oy)||1; if(od<SEPR*0.92){ sepx-=ox/od*(SEPR*0.92-od); sepy-=oy/od*(SEPR*0.92-od); } }   // ease off the PLAYER too — race clean, don't just wall them off
+      const ahead=ox*Math.cos(r.a)+oy*Math.sin(r.a), yK=ahead>0?1:0.4;
+      if(od<SEPR){ sepx-=ox/od*(SEPR-od)*yK; sepy-=oy/od*(SEPR-od)*yK; }                      // push apart when overlapping → spread across the road
+      if(ahead>0&&ahead<220&&od<240)drafting=true; }   // a car right in front = slipstream
+    { const ox=car.x-r.x,oy=car.y-r.y,od=Math.hypot(ox,oy)||1, ah=ox*Math.cos(r.a)+oy*Math.sin(r.a), yK=ah>0?1:0.4;
+      if(od<SEPR*0.92){ sepx-=ox/od*(SEPR*0.92-od)*yK; sepy-=oy/od*(SEPR*0.92-od)*yK; } }   // same for the PLAYER — they still avoid you in front, but no longer step aside when you attack from behind
     if(sepx||sepy){ let sa=Math.atan2(sepy,sepx),dsep=sa-desired; while(dsep>Math.PI)dsep-=2*Math.PI; while(dsep<-Math.PI)dsep+=2*Math.PI; desired+=Math.max(-0.5,Math.min(0.5,dsep))*0.75;
       const sm=Math.hypot(sepx,sepy)||1; r.x+=sepx/sm*Math.min(sm,120)*dt*6; r.y+=sepy/sm*Math.min(sm,120)*dt*6; }   // + a STRONGER direct positional shove so a clump physically fans apart even at low speed on a tight hairpin (kills the dogpile before it forms)
     // DODGE ON-ROAD HAZARDS — steer around any just ahead; eat a slowdown if clipped (they read the road like a real racer)
@@ -1068,9 +1103,32 @@
     r.nitroCd=(r.nitroCd==null?1+Math.random()*3:r.nitroCd)-dt;
     const sd0=Math.atan2(TRACK[TI(nr+2)].y-TRACK[nr].y,TRACK[TI(nr+2)].x-TRACK[nr].x), sd1=Math.atan2(TRACK[TI(apexI+2)].y-TRACK[apexI].y,TRACK[TI(apexI+2)].x-TRACK[apexI].x);
     let cc=sd1-sd0; while(cc>Math.PI)cc-=2*Math.PI; while(cc<-Math.PI)cc+=2*Math.PI;
-    if(r.nitroCd<=0 && Math.abs(cc)<0.24 && (r.surge||0)<=0){ r.surge=0.8+Math.random()*0.5; r.nitroCd=(champMode?1.3:2)+Math.random()*(champMode?2.4:3); }   // fire a self-nitro on a straight (champ rivals recharge FASTER → push more often)
+    // ★ STRATEGIC NITRO. It used to fire on a random timer the instant the road went straight, which spends
+    // the punch on empty tarmac and leaves nothing for the moment that decides a position. Now it is spent
+    // when it BUYS something: hunting a car within striking distance, fending off an attacker, or the last
+    // lap. Otherwise the rival banks it. The cooldown still caps how often it can go.
+    const _lastLap=(r.lap>=TOTAL_LAPS-1);
+    const _hunt=(r._chaseD||1e9)<820;      // close enough ahead that a surge could actually complete the pass
+    const _press=(r._threatD||1e9)<300;    // someone on the bumper — spend it to stay in front
+    const _worth=_hunt||_press||_lastLap;
+    if(r.nitroCd<=0 && Math.abs(cc)<0.24 && (r.surge||0)<=0 && _worth){ r.surge=0.8+Math.random()*0.5; r.nitroCd=(champMode?1.3:2)+Math.random()*(champMode?2.4:3); }   // fire a self-nitro on a straight (champ rivals recharge FASTER → push more often)
+    else if(r.nitroCd<=0 && !_worth) r.nitroCd=0.35;   // nothing to gain right now — re-check shortly rather than burn it into empty road
     if((r.surge||0)>0){ r.surge-=dt; spd+=(champMode?305:270); }   // capsule OR self-nitro surge (bigger punch in championship)
     if(drafting) spd+=90;   // slipstream tow → intra-pack overtakes (positions trade, not a static train)
+    // ★ CORNER-EXIT SURGE — the rival answer to the player's drift → charge → burn loop. Load up through a
+    // bend and the energy comes back on the way out, so a rival that takes a corner well is rewarded the same
+    // way a player holding a clean drift is. Without this the player's signature mechanic had no opposition:
+    // you could concede speed everywhere else and still take every corner for free.
+    // ⚠️ THE COOLDOWN IS LOAD-BEARING. Without it the surge fires once per corner, so the benefit scales with
+    // how many corners a lap has — and SPAGHETTI BOWL is six hairpins, so rivals banked ~6 surges a lap there
+    // against 1–2 on a flowing circuit. Measured: at a 1.80 pace ratio SPAGHETTI still beat the reference
+    // driver while GRAND PRIX at 1.91 lost to it — an inversion caused purely by corner COUNT, not by pace.
+    // The cooldown keeps the mechanic (take a corner well, get rewarded) without letting it compound.
+    r.exitCd=Math.max(0,(r.exitCd||0)-dt);
+    if(cSev>0.20 && rspd0>150) r.chg=Math.min(2.4,(r.chg||0)+dt*(0.6+Math.min(1.4,cSev*2.2)));
+    else if((r.chg||0)>0.5 && cSev<0.12 && r.exitCd<=0){ r.exitS=Math.min(0.85,0.28+r.chg*0.24); r.chg=0; r.exitCd=1.7; }   // road opens → cash it in, then hold off
+    else r.chg=Math.max(0,(r.chg||0)-dt*0.3);                                                  // bleed, so charge can't be banked forever
+    if((r.exitS||0)>0){ r.exitS-=dt; spd+=165*Math.min(1,r.exitS*2.4); }
     r.vx=Math.cos(r.a)*spd; r.vy=Math.sin(r.a)*spd;                                   // rail velocity — read by the bump math
     r.kx=(r.kx||0)*Math.max(0,1-dt*4.5); r.ky=(r.ky||0)*Math.max(0,1-dt*4.5);         // bump KNOCKBACK, decays over ~0.2s so a hit punts them then they recover
     r.x+=(r.vx+r.kx)*dt; r.y+=(r.vy+r.ky)*dt;
