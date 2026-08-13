@@ -519,7 +519,7 @@
     spa:   {name:'SPEEDWAY', roadW:580, laps:6, rSpd:810, rStep:32, rN:5, spd:1.08, rCatch:258, rDrop:96, soften:1.45, wsc:0.637, wpts:[[-5200,1700],[2000,2300],[4900,1500],[5000,200],[2500,-500],[-1200,-700],[-4400,-1500],[-5400,-200]]},   // TEMPLE OF SPEED — long straights + sweeping end hairpins, minimal middle (safe 1.60x)
     // ===== CUSTOM WIDE CIRCUITS — flowing complex shapes, NO self-folds/overlap (validated), arcade-wide + AI-friendly. NO JUMPS. =====
     serpent:{name:'GRAND PRIX', roadW:560, laps:3, rSpd:830, rStep:30, rN:5, spd:1.06, rCatch:245, rDrop:102, soften:1.6, wsc:3.887, wpts:[[-5000,1400],[-2000,2000],[1500,2100],[4200,1400],[4800,-200],[3400,-1200],[1200,-1000],[-400,-1700],[-2400,-1300],[-4400,-1600],[-5200,-200],[-4400,900]]},   // FLOWING GP CIRCUIT — long straight, fast sweepers, a technical kink; NO jumps (safe 1.91x)
-    spaghetti:{name:'SPAGHETTI BOWL', roadW:560, laps:2, rSpd:820, rStep:30, rN:5, spd:1.05, rCatch:245, rDrop:100, gen:t=>{const r=7600+1900*Math.cos(6*t);return{x:r*Math.cos(t),y:-r*Math.sin(t)};}},   // 6-HAIRPIN FLOWER — COUNTER-CLOCKWISE (left turns), WIDENED to 560 (safe 2.07x)
+    spaghetti:{name:'SPAGHETTI BOWL', roadW:560, laps:3, rSpd:820, rStep:30, rN:5, spd:1.05, rCatch:245, rDrop:100, gen:t=>{const r=7600+1900*Math.cos(6*t);return{x:r*Math.cos(t),y:-r*Math.sin(t)};}},   // 6-HAIRPIN FLOWER — COUNTER-CLOCKWISE (left turns), WIDENED to 560 (safe 2.07x)
     interstate:{name:'INTERSTATE', roadW:580, laps:5, rSpd:870, rStep:31, rN:5, spd:1.08, rCatch:255, rDrop:98, cross:true, freeway:true, gen:t=>({x:2960*Math.sin(t), y:1638*Math.sin(2*t)+529*Math.cos(t)})},   // GRADE-SEPARATED HIGHWAY (DRIVE the ramp up & over — no airborne jump) — world scaled ×1.26 so roadW580 keeps the crossover clean
     // ===== EGYPT — desert circuit past the Sphinx & pyramids, palms + Nile (NEW sweeping shape, WIDE) =====
     egypt:{name:'EGYPT', roadW:560, laps:3, rSpd:720, rStep:26, rN:4, spd:1.05, rCatch:220, rDrop:112, theme:'egypt', soften:1.9, wsc:2.7, wpts:[[-5000,2600],[-1500,2900],[2600,2850],[4600,2100],[4900,900],[3900,100],[2600,600],[3400,1500],[1900,1700],[1100,600],[2000,-300],[600,-600],[-400,400],[-1600,-300],[-800,-1500],[-2600,-1700],[-4200,-1000],[-4900,300],[-4200,1400],[-5000,2000]]},   // LABYRINTH CIRCUIT — waypoint+spline design: long straight, esses/switchback complex, hairpin curl, sweeping return (safe 1.36x @ roadW500). NOT a deformed ellipse.
@@ -1119,14 +1119,17 @@
     // bend and the energy comes back on the way out, so a rival that takes a corner well is rewarded the same
     // way a player holding a clean drift is. Without this the player's signature mechanic had no opposition:
     // you could concede speed everywhere else and still take every corner for free.
-    // ⚠️ THE COOLDOWN IS LOAD-BEARING. Without it the surge fires once per corner, so the benefit scales with
-    // how many corners a lap has — and SPAGHETTI BOWL is six hairpins, so rivals banked ~6 surges a lap there
-    // against 1–2 on a flowing circuit. Measured: at a 1.80 pace ratio SPAGHETTI still beat the reference
-    // driver while GRAND PRIX at 1.91 lost to it — an inversion caused purely by corner COUNT, not by pace.
-    // The cooldown keeps the mechanic (take a corner well, get rewarded) without letting it compound.
+    // ⚠️ THE COOLDOWN IS LOAD-BEARING, AND ITS LENGTH IS THE WHOLE POINT. Uncapped, the surge fires once per
+    // corner, so the reward scales with how many corners a lap has: SPAGHETTI BOWL's six hairpins banked ~6
+    // surges a lap against ~2 on a flowing circuit — a 3x advantage that exists on exactly one track.
+    // ⚠️ The first attempt used 1.7s and was DEAD CODE there: a SPAGHETTI lap is ~79s over six hairpins, so
+    // corners sit ~13s apart and a 1.7s guard never once fired. The measurement showed no change and was
+    // misread as "compounding is not the cause" — it actually meant the guard was too short to test the idea.
+    // A guard that never triggers is not evidence against the hypothesis. 6s actually binds on hairpin-dense
+    // circuits while barely touching flowing ones, which only reach ~2 surges a lap anyway.
     r.exitCd=Math.max(0,(r.exitCd||0)-dt);
     if(cSev>0.20 && rspd0>150) r.chg=Math.min(2.4,(r.chg||0)+dt*(0.6+Math.min(1.4,cSev*2.2)));
-    else if((r.chg||0)>0.5 && cSev<0.12 && r.exitCd<=0){ r.exitS=Math.min(0.85,0.28+r.chg*0.24); r.chg=0; r.exitCd=1.7; }   // road opens → cash it in, then hold off
+    else if((r.chg||0)>0.5 && cSev<0.12 && r.exitCd<=0){ r.exitS=Math.min(0.85,0.28+r.chg*0.24); r.chg=0; r.exitCd=6.0; }   // road opens → cash it in, then hold off
     else r.chg=Math.max(0,(r.chg||0)-dt*0.3);                                                  // bleed, so charge can't be banked forever
     if((r.exitS||0)>0){ r.exitS-=dt; spd+=165*Math.min(1,r.exitS*2.4); }
     r.vx=Math.cos(r.a)*spd; r.vy=Math.sin(r.a)*spd;                                   // rail velocity — read by the bump math
